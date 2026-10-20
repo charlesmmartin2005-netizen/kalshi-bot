@@ -1,0 +1,9 @@
+.env
+*.pem
+*.key
+fills_log.jsonl
+arb_log.jsonl
+# downloaded market data (~14 MB) — rebuild with: python research/strategy_lab.py fetch
+research/cache*/
+.venv/
+__pycache__/
