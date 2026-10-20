@@ -27,6 +27,9 @@ HISTORY_EVERY_SECONDS = 1.0  # one chart point per second (~3 minutes shown)
 LOG_LINES = 300
 ROTATE_SECONDS = 900         # auto-rotate re-centres the strikes this often (strategy: rolling ladder)
 ROLLED_OFF = "rolled off — working position down"
+NOTHING_TO_TRADE = ("Nothing to trade right now: today's BTC/ETH markets are in their last 2 hours and "
+                    "tomorrow's open at 4pm ET (3pm CT). With Auto-rotate on, the bot picks them up "
+                    "automatically within a minute.")
 FETCH_WORKERS = 12
 
 # Repricing: woken by every coin tick / book change, at most every
@@ -184,8 +187,10 @@ class Engine:
         picks = [p["ticker"] for p in res["picks"]]
         with self.lock:
             current = list(self.cfg.watched_tickers)
+        gap = res["notes"] and all("no event closing" in n for n in res["notes"])
+        idle_msg = NOTHING_TO_TRADE if gap else "No suitable markets right now: " + "; ".join(res["notes"])
         if not picks and not current:
-            return False, "no suitable markets right now: " + "; ".join(res["notes"])
+            return False, idle_msg
         kept = [t for t in current if t not in picks and self.risk.net(t) != 0]
         removed = [t for t in current if t not in picks and t not in kept]
         for t in removed:
@@ -205,10 +210,10 @@ class Engine:
                 if ok:
                     added.append(t)
         self.last_autopick = {**res, "added": added, "removed": removed, "kept": kept}
-        msg = f"watching {len(picks)} picks (+{len(added)} / −{len(removed)})"
+        msg = f"watching {len(picks)} picks (+{len(added)} / −{len(removed)})" if picks else idle_msg
         if kept:
             msg += f", kept {len(kept)} with open positions"
-        if res["notes"]:
+        if picks and res["notes"]:
             msg += " · " + "; ".join(res["notes"])
         log.info("Auto-pick: %s", msg)
         return True, msg
