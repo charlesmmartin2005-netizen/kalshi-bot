@@ -499,8 +499,21 @@ function renderRisk() {
       <dt>Inventory skew at limit</dt><dd>${pr.inventory_skew_cents}¢</dd>
       <dt>Delta lean (quotes only)</dt><dd>${pr.delta_lean_cents ? `${pr.delta_lean_cents}¢ at $${pr.delta_lean_ref_usd}/1%` : "off"}</dd>
       <dt>Take vs model when edge ≥</dt><dd>${pr.enable_taking ? `${pr.take_edge_cents}¢ after fee · ${pr.take_size}` : "off"}</dd>
-      <dt>Requote after · loop</dt><dd>${pr.max_quote_age_seconds}s · ${pr.loop_interval_seconds}s</dd>
-    </dl>`;
+      <dt>Requote after</dt><dd>${pr.max_quote_age_seconds}s · on every tick</dd>
+    </dl>${feedsBlock(S.feeds)}`;
+}
+
+function feedsBlock(f) {
+  if (!f) return "";
+  const idx = Object.entries(f.index || {}).map(([p, v]) => `<dt>${esc(p.split("-")[0])} index (median of exchanges)</dt><dd>${v != null ? "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : "—"}</dd>`).join("");
+  const ex = Object.entries(f.exchanges || {}).filter(([n]) => n !== "kalshi").map(([n, s]) => {
+    const live = s.connected && s.age != null && s.age < 10;
+    return `<span class="chip" title="${s.msgs} messages${s.error ? " · last error: " + esc(s.error) : ""}"><i class="sq" style="background:${live ? "var(--good)" : "var(--crit)"}"></i> ${esc(n)} ${live ? "live" : "down"}</span>`;
+  }).join(" ");
+  return `<div class="sep"></div><dl class="kv">${idx}
+      <dt>Kalshi data</dt><dd>${esc(f.kalshi_mode)}</dd>
+      <dt>Tick → requote</dt><dd>${f.reprice_latency_ms != null ? f.reprice_latency_ms + " ms" : "—"}</dd>
+    </dl><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${ex}</div>`;
 }
 
 function ladder(book) {

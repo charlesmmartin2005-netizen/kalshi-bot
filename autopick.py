@@ -26,7 +26,10 @@ from config import CONFIG
 from kalshi_client import build_client, dollars_to_cents
 
 PLAN = (("KXBTCD", 6), ("KXETHD", 3))
-MIN_HOURS, MAX_HOURS = 2.0, 48.0
+# Daily events open 25h before close; the backtests only traded that
+# window. Between ~3 and 4pm ET (today's event inside its last 2h, tomorrow's
+# not open yet) there is deliberately nothing to pick.
+MIN_HOURS, MAX_HOURS = 2.0, 26.0
 MAX_SPREAD = 4
 PRICE_BAND = (10, 90)
 
@@ -36,8 +39,7 @@ def _hours(iso):
 
 
 def _choose_event(client, series):
-    """Soonest 5pm-ET event (ticker ends in 17) closing within the window;
-    falls back to the soonest event with at least 2h left."""
+    """Soonest 5pm-ET event (ticker ends in 17) closing within the window."""
     events = client._request("GET", "/events", params={
         "series_ticker": series, "status": "open", "limit": 200, "with_nested_markets": "true"},
         authenticated=False).get("events", [])
@@ -47,11 +49,10 @@ def _choose_event(client, series):
         if not ms or not ms[0].get("close_time"):
             continue
         h = _hours(ms[0]["close_time"])
-        if h < 2:
+        if not MIN_HOURS <= h <= MAX_HOURS:
             continue
-        in_window = MIN_HOURS <= h <= MAX_HOURS
         daily = e["event_ticker"].endswith("17")
-        scored.append(((not in_window, not daily, h), e, h))
+        scored.append(((not daily, h), e, h))
     if not scored:
         return None, None
     _, e, h = min(scored, key=lambda s: s[0])
@@ -63,7 +64,8 @@ def pick(client, plan=PLAN) -> dict:
     for series, n in plan:
         event, hours = _choose_event(client, series)
         if not event:
-            notes.append(f"{series}: no open event with ≥2h left")
+            notes.append(f"{series}: no event closing in {MIN_HOURS:.0f}–{MAX_HOURS:.0f}h "
+                         f"(next daily opens 4pm ET)")
             continue
         cands = []
         for m in event.get("markets") or []:

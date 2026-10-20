@@ -119,9 +119,8 @@ class BotConfig:
     watched_tickers: list = field(default_factory=lambda: [
         t.strip() for t in os.getenv("KALSHI_WATCHED_TICKERS", "").split(",") if t.strip()
     ])
-    # How often (seconds) the main loop re-evaluates quotes even without an
-    # explicit trigger event.
-    loop_interval_seconds: float = 0.5
+    # (Repricing is event-driven — every coin tick or Kalshi book change.
+    # Timings live at the top of engine.py.)
 
 
 CONFIG = BotConfig()

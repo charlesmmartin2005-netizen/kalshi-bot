@@ -58,10 +58,22 @@ you should read "Before going live" first.
 | `simulate.py` | Monte Carlo of the old vs new rules on resampled real history |
 | `backtest.py` | Minute-by-minute replay of the fair-value strategy on settled BTC daily markets, with markouts |
 | `ledger.py` / `pnl.py` | Fill log and average-cost, settlement-aware P&L |
-| `kalshi_client.py` | REST client, request throttle (12/s) and retry on 429 |
+| `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429 |
+| `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) and the Kalshi websocket (needs an API key) |
 | `dashboard.py` + `static/index.html` | Local web dashboard |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
+| `research/index_check.py` | Exchanges vs Kalshi's real settlement values |
+| `research/late_window.py` | Is the model tradeable in the last 2h? (no) |
+
+## Market data (2026-10-20)
+
+- **Event-driven repricing.** The bot wakes on every coin tick or Kalshi book change and re-quotes every market from the latest data in about 20ms. Before, it polled every 1–3 seconds.
+- **Coin price is a streaming index:** the median of the Coinbase, Kraken, Bitstamp and Gemini websocket mids, no login needed. Across 124 real settlements it matched Kalshi's settlement value (`expiration_value`, a 60-second average of CF Benchmarks' RTI) about 20% closer than Coinbase alone: 0.58 vs 0.73bp for BTC. The 60-second averaging window is in the model too.
+- **Kalshi data.** Kalshi's websocket needs an API key (it returns 401 without one).
+  - **With a key,** books and the trade tape stream live.
+  - **Without a key,** the bot polls REST at ~8 requests/s: one batched request for every market's best bid/ask every 0.4s, trade tapes every 2s, and depth every 10s.
+- **The last 2 hours stay off-limits** (`research/late_window.py`). Even with the index and the averaging window, the market mid beat the model in every bucket in both months, and taking against the book lost money in nearly every bucket.
 
 ## What testing showed (2026-10-19)
 
@@ -95,3 +107,10 @@ you should read "Before going live" first.
   at kalshi.com/fee-schedule and set `KALSHI_MAKER_FEE_RATE`.
 - Paper-trade the fair-value strategy for a while first. Its edge is speed,
   which hourly history can't backtest.
+- The Kalshi websocket client (`feeds.KalshiStream`) has never been run,
+  because there was no API key when it was written. Watch "Kalshi data" on
+  the dashboard after adding a key. If the stream fails, the bot falls back
+  to REST.
+- Repricing on every tick means many cancel/replace orders. Check Kalshi's
+  write rate limit, and add a minimum time between requotes per market,
+  before sending real orders.

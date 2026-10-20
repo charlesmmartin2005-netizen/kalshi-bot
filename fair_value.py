@@ -4,10 +4,12 @@ the bot can quote around a price it believes instead of just around
 whatever the order book says. Two families are supported:
 
   CRYPTO  (KXBTCD/KXBTC, KXETHD/KXETH, KXSOLD/KXSOL, KXXRPD/KXXRP)
-    P(price at close beyond the strike), from the live Coinbase price and
+    P(price at close beyond the strike), from a streaming multi-exchange
+    index (feeds.py: median of Coinbase, Kraken, Bitstamp, Gemini) and
     recent realized volatility, rescaled every 60s so the model matches the
-    event's own strike ladder. Kalshi settles on the CF Benchmarks index (a
-    60s average of several exchanges), which Coinbase spot tracks closely.
+    event's own strike ladder. Kalshi settles on the 60-second average of
+    CF Benchmarks' RTI; the blend tracked real settlements ~20% closer than
+    Coinbase alone, and the averaging window is modeled (_effective_hours).
     Returns are modeled as a mix of 85% normal(sigma) + 15% normal(2*sigma)
     because crypto has fat tails. The edge this targets is SPEED: the model
     agrees with the market at rest and reprices the instant spot moves,
@@ -26,12 +28,15 @@ import logging
 import math
 import re
 import statistics
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
+
+import feeds
 
 log = logging.getLogger("fair_value")
 HTTP = requests.Session()
@@ -54,9 +59,13 @@ class FairValue:
     underlying: str = ""
     delta: float = 0.0
 
-# Last hours before close: settlement is a 60s index average and short-term
-# moves are smaller than hourly vol implies — the model was 12¢ off with
-# 12 minutes left. Don't trade on it in that window.
+# Last hours before close: don't trade on the model. Re-tested 2026-10-20
+# (research/late_window.py, every minute of the last 2h over two months)
+# with the multi-exchange index, the averaging window, and the vol fit
+# carried forward: the market mid still beat the model on Brier score in
+# every bucket, and taking against the book lost money in nearly every
+# bucket (often 5-13¢/contract). The book
+# knows more than the model near close.
 CRYPTO_MIN_HOURS_TO_TRADE = 2.0
 
 
@@ -72,6 +81,30 @@ def _cached(key, ttl, fn):
     value = fn()
     _cache[key] = (time.time(), value)
     return value
+
+
+_refreshing: set = set()
+
+
+def _cached_bg(key, ttl, fn):
+    """Like _cached, but once a value exists an expired entry is refreshed on
+    a background thread and the old value is returned meanwhile — so a
+    reprice never blocks on a slow HTTP call."""
+    hit = _cache.get(key)
+    if hit is None:
+        return _cached(key, ttl, fn)
+    if time.time() - hit[0] >= ttl and key not in _refreshing:
+        _refreshing.add(key)
+
+        def refresh():
+            try:
+                _cache[key] = (time.time(), fn())
+            except Exception as e:
+                log.warning("Background refresh of %s failed: %s", key[0], e)
+            finally:
+                _refreshing.discard(key)
+        threading.Thread(target=refresh, daemon=True).start()
+    return hit[1]
 
 
 def _norm_cdf(x):
@@ -98,6 +131,11 @@ TAIL_WEIGHT, TAIL_MULT = 0.15, 2.0
 
 
 def crypto_spot(product: str) -> float:
+    """The streaming multi-exchange index (feeds.HUB) when it's running and
+    fresh; otherwise Coinbase's REST ticker."""
+    if feeds.HUB.started and (idx := feeds.HUB.index(product)):
+        return idx
+
     def fetch():
         r = HTTP.get(f"https://api.exchange.coinbase.com/products/{product}/ticker", timeout=5)
         r.raise_for_status()
@@ -116,13 +154,25 @@ def crypto_sigma_per_sqrt_hour(product: str) -> float:
         closes = [c[4] for c in sorted(r.json(), key=lambda c: c[0])][-169:]
         rets = [math.log(b / a) for a, b in zip(closes, closes[1:])]
         return max(statistics.pstdev(rets[-24:]), statistics.pstdev(rets))
-    return _cached(("sigma", product), 600, fetch)
+    return _cached_bg(("sigma", product), 600, fetch)
 
 
 def _prob_beyond(log_ratio_sd_units):
     """P(Z > x) under the fat-tailed mixture, x in units of sigma."""
     x = log_ratio_sd_units
     return (1 - TAIL_WEIGHT) * (1 - _norm_cdf(x)) + TAIL_WEIGHT * (1 - _norm_cdf(x / TAIL_MULT))
+
+
+SETTLE_WINDOW_HOURS = 1 / 60   # settles on the average of 60 one-second index prints
+
+
+def _effective_hours(hours: float) -> float:
+    """Variance time for an average-settled payoff: the time until the
+    averaging window starts, plus a third of the window (the variance of the
+    mean of a random walk over a window is 1/3 of the window's). Matters
+    only in the last minutes; research/late_window.py found it narrowed the
+    model's gap to the market there by ~0.5¢."""
+    return max(hours - SETTLE_WINDOW_HOURS, 0.0) + min(hours, SETTLE_WINDOW_HOURS) / 3 or 1 / 3600
 
 
 def _crypto_prob(market, spot, sd) -> float | None:
@@ -162,7 +212,7 @@ def _event_vol_multiplier(event_ticker, spot, base_sd):
         best = min((sum((_crypto_prob(m, spot, base_sd * k) * 100 - mid) ** 2 for m, mid in pts), k)
                    for k in [x / 20 for x in range(6, 61)])   # 0.30x … 3.00x
         return best[1], len(pts)
-    return _cached(("volfit", event_ticker), 60, fit)
+    return _cached_bg(("volfit", event_ticker), 60, fit)
 
 
 def crypto_fair_value(market: dict) -> FairValue | None:
@@ -174,7 +224,7 @@ def crypto_fair_value(market: dict) -> FairValue | None:
     if hours <= 0:
         return None
     spot, sigma = crypto_spot(product), crypto_sigma_per_sqrt_hour(product)
-    base_sd = sigma * math.sqrt(max(hours, 1 / 60))
+    base_sd = sigma * math.sqrt(_effective_hours(hours))
     mult, n_fit = _event_vol_multiplier(market.get("event_ticker"), spot, base_sd)
     p = _crypto_prob(market, spot, base_sd * mult)
     if p is None:

@@ -39,9 +39,10 @@ class KalshiClient:
     # pace requests ourselves and retry 429s with backoff — otherwise a
     # 66-page catalog sweep starves the trading loop and its 429s count
     # toward the consecutive-error kill switch.
-    # Kalshi's basic tier allows 20 reads/s; 12 leaves headroom (the
-    # dashboard's background sweeps share this budget).
-    MAX_REQUESTS_PER_SECOND = float(os.getenv("KALSHI_MAX_RPS", "12"))
+    # Unauthenticated reads got 429s at ~12/s combined (2026-10-20), so stay
+    # at 10. The engine's REST polling uses ~8/s; the dashboard's background
+    # sweeps share the rest.
+    MAX_REQUESTS_PER_SECOND = float(os.getenv("KALSHI_MAX_RPS", "10"))
     RATE_LIMIT_RETRIES = 3
     _throttle_lock = threading.Lock()
     _next_slot = 0.0
