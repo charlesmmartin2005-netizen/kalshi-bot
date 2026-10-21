@@ -55,6 +55,9 @@ class MarketMaker:
         self._seen_trades: dict[str, set] = {}
         self.deltas: dict[str, tuple[str, float]] = {}   # ticker -> (coin, Δprob per 1% move)
         self._recently_cancelled: dict[str, list[RestingQuote]] = {}
+        # Paper-fill diagnostics: for every tape trade, cents short of our
+        # quote on that side (0 = reached it); dashboard/health checks read it.
+        self.fill_stats = {"trades": 0, "no_quote": 0, "miss_hist": [0] * 11}
 
     @property
     def paper(self):
@@ -62,7 +65,8 @@ class MarketMaker:
 
     # ---- one evaluation cycle for a single market -------------------------
 
-    def evaluate_market(self, ticker: str, market: dict | None = None, book: dict | None = None) -> dict:
+    def evaluate_market(self, ticker: str, market: dict | None = None, book: dict | None = None,
+                        allow_takes: bool = True) -> dict:
         if book is None:
             book = normalize_orderbook(self.client.get_orderbook(ticker))
         fv = fair_value.fair_value(market) if market and fair_value.supported(market) else None
@@ -78,6 +82,8 @@ class MarketMaker:
             plan.takes = plan_quotes(book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
         else:
             plan = plan_quotes(book, self.risk.net(ticker), self.cfg.risk, sides, fv)
+        if not allow_takes:
+            plan.takes = []
 
         for action, price, size in plan.takes:
             self._take(ticker, action, price, size, fv)
@@ -205,6 +211,18 @@ class MarketMaker:
             price = round(float(t["yes_price_dollars"]) * 100)
             remaining = float(t["count_fp"])
             taker_buys = t["taker_side"] == "yes"
+            # Diagnostics: how far was this trade from our quote on its side?
+            side = "sell" if taker_buys else "buy"
+            live = [q for q in cancelled + list(quotes) if q.action == side and q.placed_at <= ts
+                    and (q.cancelled_at is None or ts < q.cancelled_at)]
+            st = self.fill_stats
+            st["trades"] += 1
+            if live:
+                q0 = live[-1]
+                gap = (q0.price_cents - price) if side == "sell" else (price - q0.price_cents)
+                st["miss_hist"][min(max(int(gap), 0), 10)] += 1     # 0 = reached our quote
+            else:
+                st["no_quote"] += 1
             # Match against whatever was actually resting when the trade
             # happened — including quotes replaced since (the bot reprices
             # every few seconds, and the tape lags).

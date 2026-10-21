@@ -47,7 +47,22 @@ class KalshiClient:
     _throttle_lock = threading.Lock()
     _next_slot = 0.0
 
+    # Background work (the dashboard's market sweeps) runs on a low-priority
+    # client capped at this rate, so the trading loop always has headroom —
+    # a full sweep used to starve it for 10-25s.
+    LOW_PRIORITY_RPS = 3.0
+    low_priority = False
+    _low_lock = threading.Lock()
+    _next_low_slot = 0.0
+
     def _wait_for_slot(self):
+        if self.low_priority:
+            with KalshiClient._low_lock:
+                now = time.monotonic()
+                wait = KalshiClient._next_low_slot - now
+                KalshiClient._next_low_slot = max(now, KalshiClient._next_low_slot) + 1 / self.LOW_PRIORITY_RPS
+            if wait > 0:
+                time.sleep(wait)
         with KalshiClient._throttle_lock:
             now = time.monotonic()
             wait = KalshiClient._next_slot - now

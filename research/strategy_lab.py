@@ -263,6 +263,7 @@ class Variant:
     flatten_hours: float = 0.0     # cross the spread to close every position this long before settlement
     lean_takes: bool = True        # False = the delta lean moves resting quotes only, never triggers takes
     strict_fills: bool = False     # maker fills must survive the next reprice (see run_day)
+    spot_delay_min: int = 0        # model sees the coin price this many minutes late (speed test)
 
 
 def _clip(x, lo=-1.0, hi=1.0):
@@ -278,7 +279,7 @@ def run_day(v: Variant, evs):
     for i in range(n):
         marks = {}
         for ev in evs:
-            s, spot, sd = ev["series"], ev["spots"][i], ev["sd"][i]
+            s, spot, sd = ev["series"], ev["spots"][max(0, i - v.spot_delay_min)], ev["sd"][i]
             hours_left = (ev["close"] - ev["open"]) / 3600 - i / 60
             tradeable = hours_left >= v.min_hours and ev["fit_ok"][i]
             if tradeable:
@@ -394,6 +395,7 @@ def run_day(v: Variant, evs):
             "fees": sum(p.total_fees_cents for p in risk.positions.values()) / 100,
             "fill_hours": len(fill_hours), "model_hours": len(model_hours),
             "peak_exposure": peak_exposure, "markouts": markouts,
+            "fill_times": [(ev["open"] + i * 60, kind) for i, ev, _t, _a, _p, _s, kind in fills],
             "btc_move": next((abs(e["spots"][-1] / e["spots"][0] - 1) * 100 for e in evs
                               if e["series"] == "KXBTCD"), 0.0),
             "date": datetime.fromtimestamp(evs[0]["close"], timezone.utc).strftime("%m-%d")}

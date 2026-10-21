@@ -247,6 +247,7 @@ class KalshiStream(_WsThread):
         self.last_msg = 0.0
         self._ws = None
         self._seq = {}
+        self.versions: dict[str, int] = {}      # ticker -> book update counter
 
     def headers(self):
         h = self.auth.sign_request("GET", self.PATH)
@@ -306,6 +307,7 @@ class KalshiStream(_WsThread):
                     book[side][_cents(px)] = float(qty)
             with self.lock:
                 self.books[t] = book
+                self.versions[t] = self.versions.get(t, 0) + 1
             self._seq[m.get("sid")] = m.get("seq")
             self.changed.set()
         elif typ == "orderbook_delta" and t:
@@ -324,6 +326,7 @@ class KalshiStream(_WsThread):
                 levels[px] = levels.get(px, 0) + delta
                 if levels[px] <= 0:
                     del levels[px]
+                self.versions[t] = self.versions.get(t, 0) + 1
             self.changed.set()
         elif typ == "trade" and t:
             ts = msg.get("ts")
@@ -347,7 +350,10 @@ class KalshiStream(_WsThread):
             no = sorted(b["no"].items(), reverse=True)
         bid = yes[0][0] if yes else None
         ask = 100 - no[0][0] if no else None
-        return {"yes_bid": bid, "yes_ask": ask,
+        # The stream is only used while healthy (a message within 30s), and
+        # an unchanged book is still current — so its age is the stream's.
+        return {"yes_bid": bid, "yes_ask": ask, "ts": time.time() if self.healthy else self.last_msg,
+                "version": self.versions.get(ticker, 0),
                 "spread_cents": ask - bid if bid is not None and ask is not None else None,
                 "raw_yes_levels": yes, "raw_no_levels": no}
 

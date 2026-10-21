@@ -41,6 +41,9 @@ BOOK_POLL_SECONDS = 0.4      # 1 batched request: every market's best bid/ask
 TRADES_POLL_SECONDS = 2.0    # 1 request per market (paper fills; timing-exact via quote history)
 DEPTH_POLL_SECONDS = 10.0    # 1 request per market, only for the dashboard's depth ladder
 STREAM_CHECK_SECONDS = 0.5   # with the websocket: how often to drain its trade buffer / check health
+# A market whose Kalshi book is older than this is not quoted or traded
+# (quotes are pulled) — e.g. while REST polling is failing or after sleep.
+MAX_BOOK_AGE_SECONDS = 3.0
 
 
 class _RingLogHandler(logging.Handler):
@@ -79,10 +82,12 @@ class Engine:
         self._depth: dict[str, tuple] = {}            # ticker -> last (yes levels, no levels)
         self._kbooks: dict[str, dict] = {}            # ticker -> latest REST-polled book
         self._pending_trades: dict[str, list] = {}    # ticker -> trades not yet matched to quotes
+        self._take_version: dict[str, object] = {}    # ticker -> book version last taken against
         self._pool = ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefix="fetch")
         self._data_thread = None
         self._wake = threading.Event()
         self.reprice_latency_ms = None
+        self.reprice_ms = None
         self.kalshi_stream = None
         # The streaming index runs even while the bot is stopped, so the
         # dashboard always shows live prices.
@@ -117,6 +122,10 @@ class Engine:
             self.running = True
             self.started_at = time.time()
             self._stop.clear()
+            # Start from fresh data only — nothing cached from a previous run.
+            self._kbooks.clear()
+            self._pending_trades.clear()
+            self.books.clear()
             if self.client.auth is not None and self.kalshi_stream is None:
                 # Kalshi's websocket needs an API key; without one the data
                 # loop polls REST instead.
@@ -320,12 +329,14 @@ class Engine:
         """One request for every market's best bid/ask (+ market info);
         full orderbooks for the depth ladder when `depth`."""
         rows = {m["ticker"]: m for m in self.client.get_markets_batch(tickers)}
+        fetched_at = time.time()
         futs = {t: self._pool.submit(self.client.get_orderbook, t) for t in tickers} if depth else {}
         changed = False
         with self.lock:
             for t, m in rows.items():
                 self.market_info[t] = m
                 book = top_of_book(m)
+                book["ts"] = fetched_at
                 if t in futs:
                     try:
                         full = normalize_orderbook(futs[t].result())
@@ -355,6 +366,7 @@ class Engine:
     def run_cycle(self):
         """Fill, then reprice every watched market from the latest data. No
         network calls except the model's (cached, refreshed in background)."""
+        started = time.time()
         tick_ts = feeds.HUB.last_update
         with self.lock:
             tickers = list(self.cfg.watched_tickers)
@@ -365,13 +377,32 @@ class Engine:
                 book = self._current_book(ticker)
                 if book is None or ticker not in self.market_info:
                     continue                       # no data yet
+                age = started - book.get("ts", 0)
+                if age > MAX_BOOK_AGE_SECONDS:
+                    # Never trade a stale book against a live coin price: on
+                    # 2026-10-21 a restart priced 16h-old books with the live
+                    # index and "bought" 540 contracts at prices long gone.
+                    with self.lock:
+                        if self.maker.resting_quotes.get(ticker):
+                            log.warning("Book for %s is %.0fs old — pulling quotes until fresh data", ticker, age)
+                            self.maker._cancel_resting(ticker, reason="stale book")
+                        self.maker.last_plan[ticker] = {**self.maker.last_plan.get(ticker, {}),
+                                                        "mode": "idle", "reason": f"book {age:.0f}s old — waiting for fresh data"}
+                    continue
                 if pending.get(ticker):
                     # Fill first, against the quotes that were resting while
                     # these trades happened; then reprice with the new position.
                     with self.lock:
                         self.maker.process_trades(ticker, pending[ticker])
+                # One take per market per book update: the bot reprices many
+                # times a second but a REST book refreshes every 0.4s — taking
+                # again at an offer we just lifted would count liquidity twice.
+                version = book.get("version", book.get("ts"))
+                fresh_for_take = self._take_version.get(ticker) != version
                 with self.lock:
-                    self.maker.evaluate_market(ticker, self.market_info[ticker], book)
+                    self.maker.evaluate_market(ticker, self.market_info[ticker], book, allow_takes=fresh_for_take)
+                    if self.maker.last_plan.get(ticker, {}).get("takes"):
+                        self._take_version[ticker] = version
                 self._record_book(ticker, book)
                 if book["yes_bid"] is not None and book["yes_ask"] is not None:
                     marks[ticker] = (book["yes_bid"] + book["yes_ask"]) / 2
@@ -382,7 +413,10 @@ class Engine:
         with self.lock:
             self.risk.update_marks(marks)
         now = time.time()
-        if tick_ts and now - tick_ts < 5:
+        work_ms = (now - started) * 1000
+        self.reprice_ms = work_ms if self.reprice_ms is None else 0.9 * self.reprice_ms + 0.1 * work_ms
+        # Tick -> requote, only for cycles a new tick actually triggered.
+        if tick_ts and tick_ts > (self.last_cycle_at or 0):
             ms = (now - tick_ts) * 1000
             self.reprice_latency_ms = ms if self.reprice_latency_ms is None else 0.9 * self.reprice_latency_ms + 0.1 * ms
         self.cycles += 1
@@ -459,7 +493,9 @@ class Engine:
                 "feeds": {**feeds.HUB.snapshot(),
                           "kalshi_mode": ("websocket" if self.kalshi_stream and self.kalshi_stream.healthy
                                           else "REST polling" + ("" if self.client.auth else " (websocket needs an API key)")),
-                          "reprice_latency_ms": round(self.reprice_latency_ms, 1) if self.reprice_latency_ms else None},
+                          "reprice_latency_ms": round(self.reprice_latency_ms, 1) if self.reprice_latency_ms else None,
+                          "reprice_work_ms": round(self.reprice_ms, 1) if self.reprice_ms else None,
+                          "fill_stats": self.maker.fill_stats},
                 "last_autopick": ({k: self.last_autopick[k] for k in ("ts", "notes", "added", "removed", "kept")}
                                   if self.last_autopick else None),
                 "risk": {

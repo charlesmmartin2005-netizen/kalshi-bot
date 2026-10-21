@@ -24,6 +24,7 @@ import pnl
 import scanner
 from config import CONFIG
 from engine import Engine
+from kalshi_client import build_client
 
 HOST, PORT = "127.0.0.1", 8050
 STATIC = Path(__file__).parent / "static"
@@ -92,6 +93,9 @@ def state():
 # latest result immediately.
 
 SWEEP_SECONDS = 300
+# Sweeps share Kalshi's rate limit with trading, so they run low-priority.
+SWEEP_CLIENT = build_client(CONFIG)
+SWEEP_CLIENT.low_priority = True
 _sweep = {"scan": None, "arb": None, "running": False, "error": None}
 _sweep_wake = threading.Event()
 
@@ -99,7 +103,7 @@ _sweep_wake = threading.Event()
 def _run_sweep(force_catalog: bool):
     _sweep["running"] = True
     try:
-        rows = scanner.scan(engine.client, force=force_catalog)
+        rows = scanner.scan(SWEEP_CLIENT, force=force_catalog)
         suitable = [r for r in rows if r["tradeable"]]
         _sweep["scan"] = {
             "ts": time.time(), "markets_active": len(rows),
@@ -109,7 +113,7 @@ def _run_sweep(force_catalog: bool):
                      + [r for r in suitable if r["strategy"] == "book"][:40]
                      + [r for r in rows if not r["tradeable"]][:20]),
         }
-        _sweep["arb"] = arb.scan(engine.client)       # reuses the catalog just loaded
+        _sweep["arb"] = arb.scan(SWEEP_CLIENT)        # reuses the catalog just loaded
         _sweep["error"] = None
     except Exception as e:
         logging.getLogger("dashboard").exception("Sweep failed")
