@@ -29,7 +29,7 @@ HISTORY_EVERY_SECONDS = 1.0  # one chart point per second (~3 minutes shown)
 LOG_LINES = 300
 ROTATE_SECONDS = 900         # auto-rotate re-centres the strikes this often (strategy: rolling ladder)
 ROLLED_OFF = "rolled off — working position down"
-NOTHING_TO_TRADE = ("Nothing to trade right now: today's BTC/ETH markets are in their last 2 hours and "
+NOTHING_TO_TRADE = ("Nothing to trade right now: today's BTC markets are in their last 2 hours and "
                     "tomorrow's open at 4pm ET (3pm CT). With Auto-rotate on, the bot picks them up "
                     "automatically within a minute.")
 FETCH_WORKERS = 12

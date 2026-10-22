@@ -235,9 +235,12 @@ def replay_event(client, ev, markets, n_strikes, hour_closes, log_lines):
                     improved = touch is None or (target[0] > touch if action == "buy" else target[0] < touch)
                     resting[t][action] = (target[0], target[1], improved)
 
-            # maker fills from real trades in the next minute
+            # maker fills from real trades in the next minute. books[minute]
+            # and spots[minute] are closes of the candle [minute, minute+60),
+            # so the quote is priced at minute+60; until 2026-10-22 this
+            # matched trades from [minute, minute+60), before that snapshot.
             for when, taker_buys, price, n in trades[t]:
-                if when < minute or when >= minute + 60:
+                if when < minute + 60 or when >= minute + 120:
                     continue
                 action = "sell" if taker_buys else "buy"
                 q = resting[t].get(action)

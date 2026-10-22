@@ -307,7 +307,7 @@ td .sub { color: var(--ink-3); font-size: 11.5px; }
 <div class="section-head">
   <h3>Live markets</h3><span class="chip" id="mcount"></span>
   <span class="grow"></span>
-  <button class="btn primary" id="btnAutopick" title="Pick the best BTC/ETH strikes for the fair-value strategy (keeps markets with open positions)">
+  <button class="btn primary" id="btnAutopick" title="Pick the best BTC strikes for the fair-value strategy (keeps markets with open positions)">
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Auto-pick</button>
   <label class="chip" style="cursor:pointer" title="Re-centre on the strikes nearest the money every 15 min (and when a market nears close). Markets rolled off with a position go reduce-only until flat."><input type="checkbox" id="autoRotate" style="accent-color:var(--accent);margin:0"> Auto-rotate</label>
   <form class="add" id="addForm" autocomplete="off">
@@ -532,7 +532,7 @@ function renderMarkets() {
   $("mcount").textContent = `${S.markets.length} watched` + (S.last_autopick ? ` · picked ${t2(S.last_autopick.ts)}` : "");
   if (document.activeElement !== $("autoRotate")) $("autoRotate").checked = !!S.auto_rotate;
   const host = $("markets");
-  if (!S.markets.length) { host.innerHTML = `<div class="panel empty" style="grid-column:1/-1"><b>No markets on the watchlist.</b><br>Click <b>Auto-pick</b> above for the best BTC/ETH strikes, pick from the scanner below, or paste a ticker.</div>`; return; }
+  if (!S.markets.length) { host.innerHTML = `<div class="panel empty" style="grid-column:1/-1"><b>No markets on the watchlist.</b><br>Click <b>Auto-pick</b> above for the best BTC strikes, pick from the scanner below, or paste a ticker.</div>`; return; }
   const keep = new Set(S.markets.map(m => m.ticker));
   [...host.children].forEach(c => { if (!keep.has(c.dataset.t)) c.remove(); });
   S.markets.forEach((m, i) => {

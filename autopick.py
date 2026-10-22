@@ -2,7 +2,7 @@
 Chooses which markets the bot should watch, following what testing showed
 works for the fair-value strategy:
 
-  - BTC and ETH daily markets (5pm ET close), the setup the backtests tested.
+  - BTC daily markets (5pm ET close), the setup the backtests tested.
   - The soonest event with at least MIN_HOURS left (the model isn't trusted
     in the last 2h), up to MAX_HOURS out.
   - Strikes priced nearest 50¢, where prices react most to spot moves and
@@ -10,8 +10,10 @@ works for the fair-value strategy:
     move and give the bot almost nothing to catch.
   - Only strikes that traded in the last 24h, have a two-sided book, and get
     a tradeable model price (the ladder vol fit worked).
-  - 6 BTC + 3 ETH, the "rolling ladder" strategy
-    (research/README.md). The engine re-runs this every 15 minutes
+  - 6 BTC strikes, the "rolling ladder" strategy (research/README.md). ETH
+    was dropped on 2026-10-22: its takes had no edge after the fee in either
+    month and its quotes lost $350–620/month in the stricter fill tests.
+    The engine re-runs this every 15 minutes
     (auto-rotate) so the watched strikes follow the coin as it moves —
     fixed strikes drift to 95¢/5¢ where nothing trades; rolling roughly
     tripled fills in the backtest.
@@ -25,7 +27,7 @@ import fair_value
 from config import CONFIG
 from kalshi_client import build_client, dollars_to_cents
 
-PLAN = (("KXBTCD", 6), ("KXETHD", 3))
+PLAN = (("KXBTCD", 6),)
 # Daily events open 25h before close; the backtests only traded that
 # window. Between ~3 and 4pm ET (today's event inside its last 2h, tomorrow's
 # not open yet) there is deliberately nothing to pick.

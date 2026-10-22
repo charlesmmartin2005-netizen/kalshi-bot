@@ -13,8 +13,9 @@ changes parameters and which strikes are watched / how quotes are leaned.
 
 Fill model (same as backtest.py): takes fill at the minute's touch; resting
 quotes fill from real trades that went through our price, or traded at our
-price when our quote had improved the touch. Positions settle at the real
-result. See the caveats printed with the results.
+price when our quote had improved the touch, during the minute AFTER the
+snapshot the quote was priced from. Positions settle at the real result.
+Fees are fees.py's (makers pay 0 on these series). See research/README.md.
 """
 import argparse
 import gzip
@@ -343,13 +344,18 @@ def run_day(v: Variant, evs):
                         touch = bid if action == "buy" else ask
                         improved = touch is None or (target[0] > touch if action == "buy" else target[0] < touch)
                         r[action] = (target[0], target[1], improved)
-                # strict: trades from the PREVIOUS minute, and only if they reach
-                # both the quote that was up then and the repriced one — a
-                # live bot reprices every few seconds, so a quote that's only
-                # stale at 1-minute resolution would really have moved away.
-                for yes, px, cnt in ev["by_min"].get(t, {}).get(i - 1 if v.strict_fills else i, ()):
+                # Maker fills: trades during minute i hit the quotes resting
+                # since the end of minute i-1 (prev). Books and spot are
+                # end-of-minute snapshots, so the quote just repriced (r) was
+                # priced from data AFTER those trades. Until 2026-10-22 this
+                # lab filled against it, peeking up to a minute ahead — that
+                # was most of the maker profit it reported.
+                # strict: the trade must also reach the repriced quote, i.e.
+                # assume the live bot requotes before a taker reacts to a coin
+                # move (optimistic about speed, but no peeking at fill prices).
+                for yes, px, cnt in ev["by_min"].get(t, {}).get(i, ()):
                     action = "sell" if yes else "buy"
-                    q = (prev if v.strict_fills else r).get(action)
+                    q = prev.get(action)
                     if not q:
                         continue
                     qpx, qsize, improved = q
@@ -363,11 +369,10 @@ def run_day(v: Variant, evs):
                         risk.record_fill(t, "yes", action, fill, qpx, maker=True)
                         fills.append((i, ev, t, action, qpx, fill, "maker"))
                         fill_hours.add(i // 60)
-                        book_q = prev if v.strict_fills else r
                         if qsize - fill > 0:
-                            book_q[action] = (qpx, qsize - fill, improved)
+                            prev[action] = (qpx, qsize - fill, improved)
                         else:
-                            book_q.pop(action)
+                            prev.pop(action)
         risk.update_marks(marks)
         peak_exposure = max(peak_exposure, risk.total_exposure_usd())
 
@@ -405,7 +410,8 @@ def run_day(v: Variant, evs):
 # with today's config.py defaults.
 # (Pinned: config.py now defaults to the proposed strategy's sizes.)
 BASE = RiskConfig(max_position_per_market=25, max_total_exposure_usd=200.0, max_daily_loss_usd=25.0,
-                  max_single_market_loss_usd=15.0, quote_size=5, take_size=5, delta_lean_cents=0.0)
+                  max_single_market_loss_usd=15.0, quote_size=5, take_size=5, delta_lean_cents=0.0,
+                  min_edge_cents=2.0)   # pinned: config.py's default is now 6¢
 HIGH = replace(BASE, max_position_per_market=75, max_total_exposure_usd=900.0,
                max_daily_loss_usd=150.0, max_single_market_loss_usd=60.0,
                quote_size=15, take_size=15)
@@ -444,6 +450,10 @@ VARIANTS = [
     # The proposal: middle of the plateau the lean-strength grid found
     # (2–6¢ lean at a $15–30/1% reference all did well; stronger leans bled).
     Variant("P PROPOSED rolling ladder + delta lean", HIGH, {"KXBTCD": 6, "KXETHD": 3}, roll_min=15,
+            hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False),
+    # Live settings since 2026-10-22: P's ladder and lean, BTC only, quotes
+    # 6¢ from fair value, config.py's limits.
+    Variant("Q LIVE BTC only, quotes 6c", RiskConfig(), {"KXBTCD": 6}, roll_min=15,
             hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False),
 ]
 

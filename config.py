@@ -35,8 +35,9 @@ class KalshiConfig:
 @dataclass
 class RiskConfig:
     # Sizes and limits below are the "rolling ladder + delta lean" strategy
-    # (research/README.md): 3x the original size. Backtest: +$498 and +$548
-    # over two separate months vs +$17 / −$48 for the old settings.
+    # (research/README.md): 3x the original size. Its first backtest
+    # (+$498 / +$548 a month) matched trades to quotes priced after those
+    # trades; with that fixed, see research/README.md (2026-10-22).
 
     # --- Position limits ---
     # Max contracts held (net) in any single market at once.
@@ -57,7 +58,12 @@ class RiskConfig:
     # Minimum edge (in cents, per contract) required after estimated fees
     # before the bot will post a quote at all. This is the number that
     # determines whether you're actually profitable net of fees.
-    min_edge_cents: float = 2.0
+    # 6¢ (was 2¢ + a maker fee Kalshi doesn't charge, ~3.75¢ at 50¢): resting
+    # quotes near fair value are picked off about as often as they earn, so
+    # only wide ones pay. With BTC only, 6¢ was the one setting positive in
+    # all six 2026-10-22 tests (two months x three fill models,
+    # research/README.md); 2¢ ranged from -$694 to +$1,152 a month.
+    min_edge_cents: float = 6.0
     # How many cents inside the current best bid/ask to place your quote.
     quote_inset_cents: int = 1
     # Max contracts to quote at a time per side.

@@ -9,15 +9,21 @@ trade tape and recorded in `fills_log.jsonl`.
 
 | Strategy | Where it runs | Where the edge comes from |
 |---|---|---|
-| **Fair value** | Crypto ladders (BTC, ETH) more than 2h from close | A pricing model calibrated every 60s to the market's own strikes. It agrees with the market at rest and reprices the instant spot moves, while resting Kalshi quotes lag. It takes the book when the gap is ≥ `take_edge_cents` after the taker fee. |
+| **Fair value** | BTC daily ladder more than 2h from close | A pricing model calibrated every 60s to the market's own strikes. It agrees with the market at rest and reprices the instant spot moves, while resting Kalshi quotes lag. It takes the book when the gap is ≥ `take_edge_cents` after the taker fee. |
 | **Book** (spread capture) | Any market with a 5–15¢ spread and real volume | Quotes 1¢ inside each side. The edge is theoretical: one-way order flow can erase it. |
 | **Arbitrage** (`arb.py`) | Every mutually-exclusive event and strike ladder | Locked-in payoffs. Detection only; not auto-executed. |
 
 Since 2026-10-20 the fair-value strategy runs as **rolling ladder + delta
 lean** (backtest and comparison in `research/README.md`):
-- **Rolling ladder:** auto-pick watches the 6 BTC + 3 ETH strikes nearest the money. Auto-rotate (on by default) re-centres them every 15 minutes. A market rolled off with a position goes reduce-only until it's flat.
+- **Rolling ladder:** auto-pick watches the 6 BTC strikes nearest the money. Auto-rotate (on by default) re-centres them every 15 minutes. A market rolled off with a position goes reduce-only until it's flat.
 - **Size:** 15-contract quotes and takes, up to 75 per market, $450 total exposure.
 - **Delta lean:** the bot sums the dollars its whole book gains or loses per 1% coin move, and leans *resting quotes* (not takes) against it, by up to 4¢ at $30/1%.
+
+Since 2026-10-22 (research/README.md): **BTC only** (ETH dropped), **resting
+quotes at least 6¢ from fair value** (was ~3.75¢ at 50¢), and **makers pay
+no fee**, matching Kalshi's fee schedule for these series. Tests on
+sub-second data found the edge is in taking big gaps fast; quotes near fair
+value were picked off about as often as they earned.
 
 All strategies share the same risk rules:
 - **Inventory skew:** quotes shift against an open position.
@@ -37,6 +43,7 @@ Double-click `start-dashboard.bat`, or:
 .venv\Scripts\python.exe arb.py           # look for arbitrage right now
 .venv\Scripts\python.exe simulate.py T1 T2 --days 14   # old vs new rules, 2,000 futures
 .venv\Scripts\python.exe show_pnl.py      # P&L report from the ledger
+.venv\Scripts\python.exe research\paper_markouts.py --since 2026-10-22   # is the paper edge real?
 ```
 
 Paper mode needs no API key. To trade live you need a key in `.env`, and
@@ -63,6 +70,7 @@ you should read "Before going live" first.
 | `dashboard.py` + `static/index.html` | Local web dashboard |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
+| `research/paper_markouts.py` | Scores every paper fill by how the market moved 1, 5 and 60 minutes later, net of fees |
 | `research/index_check.py` | Exchanges vs Kalshi's real settlement values |
 | `research/late_window.py` | Is the model tradeable in the last 2h? (no) |
 
@@ -95,7 +103,31 @@ you should read "Before going live" first.
   and 6 down days, max drawdown $31.77. Takes moved in the bot's favor by
   +1.5¢ after 5 minutes and +4.1¢ after 60 (n=54); maker fills by +2.3¢
   after 5 minutes (n=856). BTC fell ~5% over the period and most takes were
-  sells, so part of the result may be trend rather than edge.
+  sells, so part of the result may be trend rather than edge. *Superseded:*
+  these maker fills were matched to trades that happened before the quote's
+  price snapshot (fixed 2026-10-22).
+
+## What testing showed (2026-10-22)
+
+Details and numbers in `research/README.md`.
+- **The earlier backtests looked ahead.** `strategy_lab.py` and
+  `backtest.py` filled resting quotes against trades from before the data
+  the quotes were priced from. Fixed, the old live settings went from
+  +$842 a month to anywhere between −$694 and +$1,152 depending on how fast
+  quotes really follow Kalshi's book, which 1-minute history can't show.
+- **The edge is speed on big gaps.** Against every real Kalshi trade, with
+  the model priced from Binance 1-second data 1s earlier: taking prices the
+  model calls 6–8¢ cheap after the fee made +1.4 to +2.8¢ per contract 5
+  minutes later in both months; 4–6¢ gaps made +0.4 to +1.3¢; smaller gaps
+  lost. The edge halves within 1 second and is nearly gone after 10.
+- **Resting quotes near fair value are about breakeven**, and in paper
+  trading they've been picked off. BTC only with quotes 6¢ from fair value
+  was the one setup positive in all six tests (two months × three fill
+  models): +$20 to +$273 a month. In the lab's harshest model (quotes
+  frozen for a whole minute) it still loses $179–341 a month, against
+  $1,616–2,118 for the old settings.
+- **Makers pay no fee** on KXBTCD/KXETHD (kalshi.com/fee-schedule); the bot
+  had charged them the taker rate.
 
 ## Before going live
 
@@ -103,8 +135,15 @@ you should read "Before going live" first.
   **not** been verified against a real response. Test with one contract.
 - Live fills are not recorded yet (`TODO(live)` in `market_maker.py`).
   Paper fills are.
-- Fees assume the taker rate for maker fills too. Check the real maker rate
-  at kalshi.com/fee-schedule and set `KALSHI_MAKER_FEE_RATE`.
+- Maker fills are free on KXBTCD/KXETHD (fee schedule checked 2026-10-22).
+  Series on Kalshi's maker-fee list charge 0.0175; set
+  `KALSHI_MAKER_FEE_RATE` if you trade one.
+- Judge paper trading with `research/paper_markouts.py`, not daily P&L:
+  takes should beat the fee 5 minutes later and maker fills shouldn't lose.
+  All strikes settle on one BTC price a day, so P&L needs months to mean
+  anything; markouts need about a week.
+- Kalshi's websocket needs an API key. Without one the bot polls the book
+  every 0.4s, and the take edge halves within a second.
 - Paper-trade the fair-value strategy for a while first. Its edge is speed,
   which hourly history can't backtest.
 - The Kalshi websocket client (`feeds.KalshiStream`) has never been run,

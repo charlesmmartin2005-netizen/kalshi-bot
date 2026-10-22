@@ -6,16 +6,18 @@ Kalshi lists these series with fee_type "quadratic": the fee per order is
     ceil_to_cent( rate * contracts * P * (1 - P) )      P = price in dollars
 
 so it's largest at 50¢ (1.75¢/contract at rate 0.07) and near zero at the
-extremes. Resting (maker) orders may be charged a lower rate than taking on
-some markets. VERIFY both rates on kalshi.com/fee-schedule — both default to
-the taker rate here, which overstates maker fees rather than understating
-them, so paper P&L errs on the pessimistic side.
+extremes. Resting (maker) fills are free on "most markets": checked against
+kalshi.com/fee-schedule on 2026-10-22, KXBTCD and KXETHD are not among the
+158 series that charge makers (those pay 0.0175, a quarter of the taker
+rate). Before, maker fills were charged the taker rate, which overstated
+paper fees by ~$600/month at backtest volumes. Set KALSHI_MAKER_FEE_RATE
+for a series that does charge makers.
 """
 import math
 import os
 
 TAKER_RATE = float(os.getenv("KALSHI_TAKER_FEE_RATE", "0.07"))
-MAKER_RATE = float(os.getenv("KALSHI_MAKER_FEE_RATE", "0.07"))
+MAKER_RATE = float(os.getenv("KALSHI_MAKER_FEE_RATE", "0.0"))
 
 
 def order_fee_cents(price_cents: float, count: float, maker: bool = True) -> int:
