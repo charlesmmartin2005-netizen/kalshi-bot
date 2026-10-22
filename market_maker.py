@@ -41,6 +41,7 @@ class RestingQuote:
     count: int
     strategy: str = ""
     improved: bool = False   # strictly better than the book's touch when placed
+    model_cents: float | None = None   # raw model when placed (logged with fills)
     placed_at: float = field(default_factory=time.time)
     cancelled_at: float | None = None
 
@@ -60,6 +61,7 @@ class MarketMaker:
         # one 38¢ offer seven times in 3s. Contracts taken at each touch price
         # come off what that touch shows until the touch moves.
         self._paper_taken: dict[str, dict] = {}   # ticker -> {(action, price): contracts}
+        self._cap_logged: dict[str, float] = {}  # coin -> last "takes held back" log time
         # Paper-fill diagnostics: for every tape trade, cents short of our
         # quote on that side (0 = reached it); dashboard/health checks read it.
         self.fill_stats = {"trades": 0, "no_quote": 0, "miss_hist": [0] * 11}
@@ -84,17 +86,19 @@ class MarketMaker:
             # The lean moves resting quotes only; takes are judged on the raw
             # model (hedging by crossing the spread lost money in testing).
             leaned = replace(fv, cents=min(99.0, max(1.0, fv.cents + lean)))
-            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, leaned)
+            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, leaned, anchor=fv.cents)
             plan.takes = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
         else:
             plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv)
         if not allow_takes:
             plan.takes = []
+        plan.takes = self._cap_take_delta(plan.takes, fv)
 
         for action, price, size in plan.takes:
             self._take(ticker, action, price, size, fv)
-        self._sync_side(ticker, "buy", plan.buy, book, plan.mode)
-        self._sync_side(ticker, "sell", plan.sell, book, plan.mode)
+        model = fv.cents if fv and fv.tradeable else None
+        self._sync_side(ticker, "buy", plan.buy, book, plan.mode, model)
+        self._sync_side(ticker, "sell", plan.sell, book, plan.mode, model)
 
         self.last_plan[ticker] = {
             "mode": plan.mode, "reason": why or plan.reason, "skew": round(plan.skew, 2),
@@ -120,6 +124,11 @@ class MarketMaker:
                 book[key] = max(0.0, book[key] - n)
         return book
 
+    def _book_delta(self, coin) -> float:
+        """The whole book's $ gain per +1% move in `coin` (each contract pays
+        $1, so net contracts x probability change per 1%)."""
+        return sum(self.risk.net(t) * d for t, (u, d) in self.deltas.items() if u == coin)
+
     def _delta_lean(self, ticker, fv) -> tuple[float, float | None]:
         """Cents to shift this market's quote center, and the whole book's
         $ gain per +1% move in this market's coin. Long the coin -> negative
@@ -128,11 +137,32 @@ class MarketMaker:
         r = self.cfg.risk
         if not fv or not fv.tradeable or not fv.underlying or not r.delta_lean_cents:
             return 0.0, None
-        same = {t: d for t, (u, d) in self.deltas.items() if u == fv.underlying}
-        port = sum(self.risk.net(t) * d for t, d in same.items())
-        dmax = max((abs(d) for d in same.values()), default=0) or 1
+        same = [d for u, d in self.deltas.values() if u == fv.underlying]
+        port = self._book_delta(fv.underlying)
+        dmax = max((abs(d) for d in same), default=0) or 1
         scale = max(-1.0, min(1.0, port / r.delta_lean_ref_usd))
         return -r.delta_lean_cents * scale * fv.delta / dmax, port
+
+    def _cap_take_delta(self, takes, fv) -> list:
+        """Shrink or drop takes that would push the book's coin exposure past
+        max_take_book_delta_usd per 1% (either way). A take that reduces
+        exposure always goes through."""
+        cap = self.cfg.risk.max_take_book_delta_usd
+        if not takes or cap is None or not fv or not fv.underlying or not fv.delta:
+            return takes
+        port, kept = self._book_delta(fv.underlying), []
+        for action, price, size in takes:
+            step = fv.delta if action == "buy" else -fv.delta
+            while size > 0 and abs(port + step * size) > max(cap, abs(port)):
+                size -= 1
+            if size > 0:
+                kept.append((action, price, size))
+                port += step * size
+            elif time.time() - self._cap_logged.get(fv.underlying, 0) > 60:   # reprices run many times a second
+                self._cap_logged[fv.underlying] = time.time()
+                log.info("Takes held back on %s: book exposure $%.0f per 1%% is at the $%.0f cap",
+                         fv.underlying, port, cap)
+        return kept
 
     def min_required_spread(self) -> float:
         """Spread needed for book-mode quoting at a 50¢ mid (fees peak there)."""
@@ -141,7 +171,7 @@ class MarketMaker:
 
     # ---- order management ---------------------------------------------------
 
-    def _sync_side(self, ticker, action, target, book, mode):
+    def _sync_side(self, ticker, action, target, book, mode, model_cents=None):
         """Make the resting quote on one side match `target` ((price, size) or
         None). Replaces it if the price changed or it's older than
         max_quote_age_seconds."""
@@ -157,9 +187,9 @@ class MarketMaker:
             price, size = target
             touch = book["yes_bid"] if action == "buy" else book["yes_ask"]
             improved = touch is None or (price > touch if action == "buy" else price < touch)
-            self._place(ticker, action, price, size, mode, improved)
+            self._place(ticker, action, price, size, mode, improved, model_cents)
 
-    def _place(self, ticker, action, price, size, strategy, improved):
+    def _place(self, ticker, action, price, size, strategy, improved, model_cents=None):
         client_order_id = str(uuid.uuid4())
         if self.paper:
             order_id = f"paper-{client_order_id}"
@@ -171,7 +201,7 @@ class MarketMaker:
             log.info("Placed live order %s: %s yes %d @ %d¢ on %s", order_id, action, size, price, ticker)
         self.resting_quotes.setdefault(ticker, []).append(RestingQuote(
             order_id=order_id, ticker=ticker, side="yes", action=action, price_cents=price,
-            count=size, strategy=strategy, improved=improved))
+            count=size, strategy=strategy, improved=improved, model_cents=model_cents))
 
     def _cancel(self, q: RestingQuote):
         q.cancelled_at = time.time()
@@ -197,7 +227,7 @@ class MarketMaker:
             # size), so a take fills immediately.
             taken = self._paper_taken.setdefault(ticker, {})
             taken[(action, price)] = taken.get((action, price), 0) + size
-            self._record_fill(ticker, action, size, price, maker=False, strategy="take")
+            self._record_fill(ticker, action, size, price, maker=False, strategy="take", model_cents=fv.cents)
         else:
             self.client.create_order(ticker=ticker, side="yes", action=action, count=size,
                                      price_cents=price, client_order_id=str(uuid.uuid4()))
@@ -266,15 +296,16 @@ class MarketMaker:
                 n = max(1, int(min(remaining, q.count)))
                 remaining -= n
                 q.count -= n
-                self._record_fill(ticker, q.action, n, q.price_cents, maker=True, strategy=q.strategy)
+                self._record_fill(ticker, q.action, n, q.price_cents, maker=True, strategy=q.strategy,
+                                  model_cents=q.model_cents)
                 if q.count <= 0 and q in quotes:
                     quotes.remove(q)
         if len(seen) > 5000:
             self._seen_trades[ticker] = set(list(seen)[-2000:])
 
-    def _record_fill(self, ticker, action, count, price, maker, strategy):
+    def _record_fill(self, ticker, action, count, price, maker, strategy, model_cents=None):
         log.info("[PAPER FILL] %s yes %d @ %d¢ on %s (%s, %s)", action, count, price, ticker,
                  "maker" if maker else "taker", strategy)
         ledger.append_fill(ticker, "yes", action, count, price, mode="paper",
-                           liquidity="maker" if maker else "taker", strategy=strategy)
+                           liquidity="maker" if maker else "taker", strategy=strategy, model_cents=model_cents)
         self.risk.record_fill(ticker, "yes", action, count, price, maker=maker)

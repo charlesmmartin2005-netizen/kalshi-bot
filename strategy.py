@@ -19,7 +19,8 @@ Two modes:
 In both modes:
   - Inventory skew: both quotes shift against the current position, scaled
     to `inventory_skew_cents` at the position limit, so the bot leans toward
-    getting flat instead of piling into one-way flow.
+    getting flat instead of piling into one-way flow. The reducing side
+    still stays `min_reduce_edge_cents` from the raw model.
   - Reduce-only: sides that would grow the position are dropped when the
     risk manager says so (position/exposure limit, per-market loss breach),
     but the side that shrinks it stays live — the old bot cancelled both and
@@ -54,13 +55,15 @@ def _shown(book, key):
     return math.inf if size is None else int(size)
 
 
-def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None) -> Plan:
+def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None, anchor=None) -> Plan:
     """
     book:     normalized book (yes_bid / yes_ask in cents, either may be None)
     position: net YES contracts (+ long YES, − long NO)
     cfg:      RiskConfig
     allowed:  {"buy", "sell"} subset from RiskManager.allowed_sides
-    fv:       FairValue or None
+    fv:       FairValue or None (for resting quotes it may include the delta lean)
+    anchor:   the raw model in cents, without the lean (defaults to fv.cents);
+              the unwind floor is measured from it
     """
     bid, ask = book.get("yes_bid"), book.get("yes_ask")
     plan = Plan(skew=-(position / cfg.max_position_per_market) * cfg.inventory_skew_cents)
@@ -95,6 +98,17 @@ def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None) -> Plan:
         center = f + plan.skew
         need = per_contract_fee_cents(center) + cfg.min_edge_cents
         buy_px, sell_px = math.floor(center - need), math.ceil(center + need)
+        # The side that shrinks the position may lean toward fair value to
+        # unwind (skew, delta lean), but never closer than
+        # min_reduce_edge_cents to the raw model: on 2026-10-22 unwind bids
+        # pulled up to fair value were picked off for -4.5¢ a contract.
+        if cfg.min_reduce_edge_cents is not None and position:
+            a = f if anchor is None else anchor
+            floor = per_contract_fee_cents(a) + cfg.min_reduce_edge_cents
+            if position < 0:
+                buy_px = min(buy_px, math.floor(a - floor))
+            else:
+                sell_px = max(sell_px, math.ceil(a + floor))
         if bid is not None:
             buy_px = min(buy_px, bid + cfg.quote_inset_cents)
             sell_px = max(sell_px, bid + 1)

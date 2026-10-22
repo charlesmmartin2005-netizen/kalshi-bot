@@ -84,6 +84,18 @@ def summarize(scored):
             "settle": avg(lambda f: f["settle"])}
 
 
+GAP_BUCKETS = ((8, "8¢+"), (6, "6–8¢"), (4, "4–6¢"), (2, "2–4¢"), (0, "0–2¢"))
+
+
+def gap_bucket(f):
+    """The model's gap after the fee for a scored fill, as a bucket label.
+    Only fills logged with edge_cents (since 2026-10-22) have one."""
+    if f.get("edge_cents") is None:
+        return None
+    g = f["edge_cents"] - f["fee"]
+    return next((label for lo, label in GAP_BUCKETS if g >= lo), "below 0¢")
+
+
 def by(scored, key):
     groups = defaultdict(list)
     for f in scored:

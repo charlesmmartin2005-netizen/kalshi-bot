@@ -21,7 +21,10 @@ lean** (backtest and comparison in `research/README.md`):
 
 Since 2026-10-22 (research/README.md): **BTC only** (ETH dropped), **resting
 quotes at least 6¢ from fair value** (was ~3.75¢ at 50¢), and **makers pay
-no fee**, matching Kalshi's fee schedule for these series. Tests on
+no fee**, matching Kalshi's fee schedule for these series. Quotes that
+unwind a position never cross the model (skew and lean used to pull them
+to fair value and beyond), and **takes stop at $50 of coin exposure per 1%
+move** either way. Tests on
 sub-second data found the edge is in taking big gaps fast; quotes near fair
 value were picked off about as often as they earned.
 

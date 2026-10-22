@@ -76,6 +76,13 @@ class RiskConfig:
     # This is what keeps one-way order flow from parking the bot at its
     # position limit (the #1 failure in the Fed-market simulation).
     inventory_skew_cents: float = 3.0
+    # Skew and delta lean pull the quote that shrinks a position toward fair
+    # value; this keeps it at least this far (cents, after fee) from the raw
+    # model. None = no floor. 0 = never pay more than the model to unwind:
+    # in the 2026-10-22 tests (two months x three fill models) it nudged the
+    # worst month from +$20 to +$27. 2c and 4c floors helped Sep-Oct but lost
+    # Aug-Sep (-$19, -$100): unwinding slower rides more into settlement.
+    min_reduce_edge_cents: float | None = 0.0
     # Delta lean: all BTC (or ETH) strikes are one bet on the coin, so the
     # bot adds up how many dollars the whole book gains/loses per 1% move
     # and leans RESTING quotes (never takes) against it — up to
@@ -96,6 +103,13 @@ class RiskConfig:
     take_edge_cents: float = 4.0
     # Contracts per take order.
     take_size: int = 15
+    # Takes all point one way in a trending move (2026-10-22: 94% sells into
+    # a BTC drop, book at -$98 per 1% by 3pm), so cap how far they can push
+    # the book's coin exposure: no take past this many $ per 1% move, either
+    # way. Takes that reduce exposure are never blocked. None = no cap. $50
+    # cost nothing in the 2026-10-22 tests (mean +$143 vs +$145 a month);
+    # the 1-minute backtest can't show the fast take bursts it's aimed at.
+    max_take_book_delta_usd: float | None = 50.0
 
     # --- Timing / staleness controls ---
     # Cancel and re-quote if a resting order has been open longer than this

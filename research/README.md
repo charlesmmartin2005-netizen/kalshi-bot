@@ -100,6 +100,29 @@ ETH's maker fills drove most of the downside (−$350 to −$620 a month in the
 pessimistic model). Removing takes made every model worse. Blocking takes
 with >20h to close made no difference.
 
+### Unwind floor and take exposure cap (2026-10-22, after a day of paper fills)
+
+Oct 22's paper fills: takes +4.27¢ a contract 5 minutes later (fee 1.50¢),
++$53 after fees; resting fills -2.33¢, -$56 at settlement, mostly unwind
+bids pulled up to fair value by skew and lean while quotes were still 2¢
+wide; 94% of takes were sells into a BTC drop. Two rules were tested on the
+live settings (BTC only, 6¢ quotes), per month:
+
+| Variant | Sep–Oct pess / mid / opt | Aug–Sep pess / mid / opt | Worst | Mean |
+|---|---|---|---|---|
+| No floor, no cap | +$122 / +$152 / +$273 | +$20 / +$146 / +$159 | +$20 | +$145 |
+| Unwind floor 0¢ (live) | +$116 / +$157 / +$269 | +$27 / +$135 / +$159 | +$27 | +$144 |
+| Unwind floor 2¢ | +$136 / +$194 / +$313 | −$19 / +$69 / +$85 | −$19 | +$130 |
+| Unwind floor 4¢ | +$166 / +$172 / +$312 | −$100 / +$49 / +$33 | −$100 | +$105 |
+| Take cap $50 per 1% (live) | +$120 / +$157 / +$271 | +$21 / +$126 / +$162 | +$21 | +$143 |
+
+Wider floors help one month and hurt the other (slower unwinding rides more
+into settlement), so the floor only stops unwind quotes crossing the model.
+The cap costs nothing here; what it's for, fast same-direction take bursts,
+1-minute data can't reproduce. Fills now log the model's price and gap
+(`model_cents`, `edge_cents`), so the markout report can check live whether
+bigger gaps pay more.
+
 ### Still unknown
 
 - Whether these trades are winnable: each print was taken by someone, maybe

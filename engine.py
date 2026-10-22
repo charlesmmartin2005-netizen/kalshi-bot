@@ -555,6 +555,8 @@ class Engine:
                     "delta_lean_cents": r.delta_lean_cents, "delta_lean_ref_usd": r.delta_lean_ref_usd,
                     "take_size": r.take_size,
                     "enable_taking": r.enable_taking, "take_edge_cents": r.take_edge_cents,
+                    "min_reduce_edge_cents": r.min_reduce_edge_cents,
+                    "max_take_book_delta_usd": r.max_take_book_delta_usd,
                     "model_stop_hours": CRYPTO_MIN_HOURS_TO_TRADE,
                     "pick_window_hours": autopick.MAX_HOURS,
                 },

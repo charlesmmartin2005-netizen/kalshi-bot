@@ -307,6 +307,7 @@ td .sub { color: var(--ink-2); font-size: 13px; }
         <div class="headrow" style="align-items:center"><h3 id="edTodayTitle">Today's fills, 5 minutes later</h3>
           <div class="segs" role="group" aria-label="Markout horizon"><button type="button" class="seg" data-h="1">1 min</button><button type="button" class="seg on" data-h="5">5 min</button><button type="button" class="seg" data-h="60">60 min</button></div></div>
         <div id="edToday" class="stack" style="gap:18px"></div>
+        <div id="edTodayGaps"></div>
         <p class="muted small" style="margin:0">White tick: the fee. A bar past its tick is edge kept. Scored from Kalshi's 1-minute prices, refreshed every 5 minutes.</p>
       </section>
       <section class="panel pad stack">
@@ -758,6 +759,10 @@ function renderEdge() {
   const bl = MK && MK.by_liquidity;
   $("edToday").innerHTML = !bl && MK && MK.error ? `<div class="down">Couldn't score fills: ${esc(MK.error)}</div>` : !bl ? `<div class="muted">Scoring today's fills…</div>`
     : row("Takes", bl.taker, C.accent) + row("Resting quotes", bl.maker, C.short) + `<span class="muted small num">${MK.fills} fills today${MK.updated ? `, scored ${hm(MK.updated)}` : ""}. A week of fills makes this trustworthy.</span>`;
+  const tg = MK && MK.takes_by_gap ? Object.entries(MK.takes_by_gap) : [];
+  $("edTodayGaps").innerHTML = tg.length ? `<table><thead><tr><th>Today's takes by model gap</th><th class="n">Contracts</th><th class="n">${hSel === 1 ? "1 min" : hSel + " min"} later</th><th class="n">After fee</th></tr></thead><tbody>${
+    tg.map(([k, s]) => { const v = s.mo[hSel]; return `<tr><td>${esc(k)} after fee</td><td class="n">${s.contracts}</td><td class="n">${v == null ? "—" : sc(v)}</td><td class="n ${v == null ? "" : v - s.fee >= 0 ? "up" : "down"}">${v == null ? "—" : sc(v - s.fee)}</td></tr>`; }).join("")}</tbody></table>`
+    : `<p class="muted small" style="margin:0">Takes by model gap appear here once today's fills carry the model's price (logged since Oct 22).</p>`;
 
   $("hhLabel").textContent = hhSel === 5 ? "5 minutes" : "60 minutes";
   const take = S.params.take_edge_cents, k = 150 / (hhSel === 5 ? 10.37 : 16.16), fm = (v) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2);
@@ -822,7 +827,9 @@ function renderActivity() {
       <dt>Quote size, inset</dt><dd>${pr.quote_size}, ${pr.quote_inset_cents}¢</dd>
       <dt>Inventory skew at the limit</dt><dd>${pr.inventory_skew_cents}¢</dd>
       <dt>Delta lean (quotes only)</dt><dd>${pr.delta_lean_cents ? `${pr.delta_lean_cents}¢ at $${pr.delta_lean_ref_usd} per 1%` : "off"}</dd>
+      <dt>Unwind quotes stay</dt><dd>${pr.min_reduce_edge_cents == null ? "no floor" : `${pr.min_reduce_edge_cents}¢+ from the model`}</dd>
       <dt>Take when the model gap is</dt><dd>${pr.enable_taking ? `${pr.take_edge_cents}¢+ after fee, ${pr.take_size} at a time` : "off"}</dd>
+      <dt>Takes stop at coin exposure</dt><dd>${pr.max_take_book_delta_usd == null ? "no cap" : `$${pr.max_take_book_delta_usd} per 1% move`}</dd>
       <dt>Model stops trading</dt><dd>${pr.model_stop_hours}h before close</dd></dl>
     <div class="sep"></div>
     <div class="num">BTC index <b style="color:var(--accent)">${btcIndex() ? strikeLabel(btcIndex()) : "—"}</b>, median of the exchanges</div>${feeds}

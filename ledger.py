@@ -11,9 +11,13 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "fills_log.jsonl")
 
 
 def append_fill(ticker: str, side: str, action: str, count: int, price_cents: int,
-                 mode: str = "paper", liquidity: str = "maker", strategy: str = ""):
+                 mode: str = "paper", liquidity: str = "maker", strategy: str = "",
+                 model_cents: float | None = None):
     """Record one fill. Call this every time a real or simulated fill happens.
-    liquidity: "maker" (our resting quote was hit) or "taker" (we crossed)."""
+    liquidity: "maker" (our resting quote was hit) or "taker" (we crossed).
+    model_cents: the model's price when the quote went up or the take was
+    made; the record then also carries edge_cents, how far the fill price was
+    on our side of it before fees (positive = the model liked the trade)."""
     record = {
         "ts": time.time(),
         "ticker": ticker,
@@ -25,6 +29,9 @@ def append_fill(ticker: str, side: str, action: str, count: int, price_cents: in
         "liquidity": liquidity,
         "strategy": strategy,  # "fair-value" | "book" | "exit" | "take"
     }
+    if model_cents is not None:
+        record["model_cents"] = round(model_cents, 2)
+        record["edge_cents"] = round((model_cents - price_cents) if action == "buy" else (price_cents - model_cents), 2)
     with open(LEDGER_PATH, "a") as f:
         f.write(json.dumps(record) + "\n")
 

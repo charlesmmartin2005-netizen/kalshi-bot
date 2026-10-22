@@ -325,7 +325,7 @@ def run_day(v: Variant, evs):
                     net = risk.net(t)
                     sides = sides & ({"sell"} if net > 0 else {"buy"})
                 book = {"yes_bid": bid, "yes_ask": ask}
-                plan = plan_quotes(book, risk.net(t), v.cfg, sides, fv)
+                plan = plan_quotes(book, risk.net(t), v.cfg, sides, fv, anchor=probs[t] * 100)
                 if lean and not v.lean_takes:
                     # takes judged on the raw model; the lean only moves resting quotes
                     raw = FairValue(min(99, max(1, probs[t] * 100)), "crypto", "", tradeable)
@@ -411,7 +411,8 @@ def run_day(v: Variant, evs):
 # (Pinned: config.py now defaults to the proposed strategy's sizes.)
 BASE = RiskConfig(max_position_per_market=25, max_total_exposure_usd=200.0, max_daily_loss_usd=25.0,
                   max_single_market_loss_usd=15.0, quote_size=5, take_size=5, delta_lean_cents=0.0,
-                  min_edge_cents=2.0)   # pinned: config.py's default is now 6¢
+                  min_edge_cents=2.0,   # pinned: config.py's default is now 6¢
+                  min_reduce_edge_cents=None, max_take_book_delta_usd=None)   # added 2026-10-22
 HIGH = replace(BASE, max_position_per_market=75, max_total_exposure_usd=900.0,
                max_daily_loss_usd=150.0, max_single_market_loss_usd=60.0,
                quote_size=15, take_size=15)

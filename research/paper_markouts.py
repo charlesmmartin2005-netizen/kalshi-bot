@@ -52,6 +52,14 @@ def main():
     print("by coin")
     for k, s in markouts.by(scored, lambda f: f["ticker"].split("-")[0]).items():
         row(k, s)
+    gapped = [f for f in scored if f.get("edge_cents") is not None]
+    if gapped:
+        for kind, label in (("taker", "takes"), ("maker", "resting quotes")):
+            fs = [f for f in gapped if f.get("liquidity", "maker") == kind]
+            if fs:
+                print(f"{label} by the model's gap after fee")
+                for k, s in markouts.by(fs, markouts.gap_bucket).items():
+                    row(k, s)
     days = len({datetime.fromtimestamp(f["ts"], timezone.utc).date() for f in fills})
     if days < 5:
         print(f"\nOnly {days} day(s) of fills: treat these numbers as anecdotes, not evidence.")

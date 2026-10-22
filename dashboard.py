@@ -281,8 +281,10 @@ def _refresh_markouts():
         mode = "paper" if CONFIG.kalshi.paper_trading else "live"
         fills = [f for f in ledger.read_all_fills() if f.get("mode", "paper") == mode and f["ts"] >= since]
         scored = markouts.score(SWEEP_CLIENT, fills, _mk["settled"])
+        takes = [f for f in scored if f.get("liquidity") == "taker" and f.get("edge_cents") is not None]
         _mk["value"] = {"since": since, "fills": len(fills), "horizons": list(markouts.HORIZONS),
                         "by_liquidity": markouts.by(scored, lambda f: f.get("liquidity", "maker")),
+                        "takes_by_gap": markouts.by(takes, markouts.gap_bucket),
                         "updated": time.time(), "error": None}
     except Exception as e:
         log.warning("Markouts failed: %s", e)
