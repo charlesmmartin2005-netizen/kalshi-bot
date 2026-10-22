@@ -299,6 +299,9 @@ def normalize_orderbook(raw_orderbook: dict) -> dict:
     return {
         "yes_bid": best_yes_bid,
         "yes_ask": best_yes_ask,
+        # Contracts shown at the touch (takes never exceed them).
+        "yes_bid_size": dict(yes_levels).get(best_yes_bid),
+        "yes_ask_size": dict(no_levels).get(best_no_bid),
         "spread_cents": (best_yes_ask - best_yes_bid)
         if (best_yes_bid is not None and best_yes_ask is not None)
         else None,
@@ -313,6 +316,11 @@ def top_of_book(market: dict) -> dict:
     bid = dollars_to_cents(market.get("yes_bid_dollars")) or None
     ask = dollars_to_cents(market.get("yes_ask_dollars"))
     ask = ask if ask and ask < 100 else None
+
+    def size(field, px):
+        return float(market[field]) if px is not None and market.get(field) else None
+
     return {"yes_bid": bid, "yes_ask": ask,
+            "yes_bid_size": size("yes_bid_size_fp", bid), "yes_ask_size": size("yes_ask_size_fp", ask),
             "spread_cents": ask - bid if bid is not None and ask is not None else None,
             "raw_yes_levels": [], "raw_no_levels": []}

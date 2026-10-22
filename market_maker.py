@@ -55,6 +55,11 @@ class MarketMaker:
         self._seen_trades: dict[str, set] = {}
         self.deltas: dict[str, tuple[str, float]] = {}   # ticker -> (coin, Δprob per 1% move)
         self._recently_cancelled: dict[str, list[RestingQuote]] = {}
+        # Paper takes never reach the real book, so the offer we just lifted
+        # is still there on the next poll — on 2026-10-21 the bot "bought"
+        # one 38¢ offer seven times in 3s. Contracts taken at each touch price
+        # come off what that touch shows until the touch moves.
+        self._paper_taken: dict[str, dict] = {}   # ticker -> {(action, price): contracts}
         # Paper-fill diagnostics: for every tape trade, cents short of our
         # quote on that side (0 = reached it); dashboard/health checks read it.
         self.fill_stats = {"trades": 0, "no_quote": 0, "miss_hist": [0] * 11}
@@ -74,14 +79,15 @@ class MarketMaker:
         if fv and fv.underlying:
             self.deltas[ticker] = (fv.underlying, fv.delta)
         lean, port = self._delta_lean(ticker, fv)
+        plan_book = self._paper_depth(ticker, book) if self.paper else book
         if lean:
             # The lean moves resting quotes only; takes are judged on the raw
             # model (hedging by crossing the spread lost money in testing).
             leaned = replace(fv, cents=min(99.0, max(1.0, fv.cents + lean)))
-            plan = plan_quotes(book, self.risk.net(ticker), self.cfg.risk, sides, leaned)
-            plan.takes = plan_quotes(book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
+            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, leaned)
+            plan.takes = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
         else:
-            plan = plan_quotes(book, self.risk.net(ticker), self.cfg.risk, sides, fv)
+            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv)
         if not allow_takes:
             plan.takes = []
 
@@ -97,6 +103,21 @@ class MarketMaker:
             "takes": len(plan.takes), "lean": round(lean, 2),
             "book_delta_usd": round(port, 2) if port is not None else None,
         }
+        return book
+
+    def _paper_depth(self, ticker, book) -> dict:
+        """The book with our own paper takes removed from the touch sizes."""
+        taken = self._paper_taken.setdefault(ticker, {})
+        touch = {"buy": book.get("yes_ask"), "sell": book.get("yes_bid")}
+        for key in [k for k in taken if touch[k[0]] != k[1]]:
+            del taken[key]                 # touch moved off that price: fresh level next time
+        if not taken:
+            return book
+        book = dict(book)
+        for (action, _), n in taken.items():
+            key = "yes_ask_size" if action == "buy" else "yes_bid_size"
+            if book.get(key) is not None:
+                book[key] = max(0.0, book[key] - n)
         return book
 
     def _delta_lean(self, ticker, fv) -> tuple[float, float | None]:
@@ -172,7 +193,10 @@ class MarketMaker:
         log.info("%sTAKE %s yes %d @ %d¢ on %s (model %.1f¢)",
                  "[PAPER] " if self.paper else "", action, size, price, ticker, fv.cents)
         if self.paper:
-            # The touch was really there, so a take fills immediately.
+            # The touch was really there (and plan_quotes capped us at its
+            # size), so a take fills immediately.
+            taken = self._paper_taken.setdefault(ticker, {})
+            taken[(action, price)] = taken.get((action, price), 0) + size
             self._record_fill(ticker, action, size, price, maker=False, strategy="take")
         else:
             self.client.create_order(ticker=ticker, side="yes", action=action, count=size,

@@ -10,7 +10,7 @@ Two modes:
     fee + min_edge below fair value, sell at least that far above. If the
     book's own touch is better for us, improve it by `quote_inset_cents`
     instead. Takes the book outright when it's mispriced vs the model by
-    `take_edge_cents` after the taker fee.
+    `take_edge_cents` after the taker fee, up to the size shown at the touch.
 
   BOOK (no model — e.g. Fed markets)
     The original strategy: 1¢ inside each side when the spread clears
@@ -47,6 +47,13 @@ def _clamp(p):
     return int(min(99, max(1, p)))
 
 
+def _shown(book, key):
+    """Whole contracts shown at the touch, or no limit when the book doesn't
+    say (simulate.py / backtest.py books carry prices only)."""
+    size = book.get(key)
+    return math.inf if size is None else int(size)
+
+
 def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None) -> Plan:
     """
     book:     normalized book (yes_bid / yes_ask in cents, either may be None)
@@ -69,18 +76,19 @@ def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None) -> Plan:
     if fv is not None and fv.tradeable:
         plan.mode = "fair-value"
         f = fv.cents
-        # -- take when the book is clearly wrong vs the model
+        # -- take when the book is clearly wrong vs the model, never more
+        #    than the touch shows
         if cfg.enable_taking:
             if ask is not None and buy_size > 0:
                 edge = f - ask - per_contract_fee_cents(ask, maker=False)
-                if edge >= cfg.take_edge_cents:
-                    n = min(cfg.take_size, buy_size)
+                n = min(cfg.take_size, buy_size, _shown(book, "yes_ask_size"))
+                if edge >= cfg.take_edge_cents and n > 0:
                     plan.takes.append(("buy", ask, n))
                     buy_size -= n
             if bid is not None and sell_size > 0:
                 edge = bid - f - per_contract_fee_cents(bid, maker=False)
-                if edge >= cfg.take_edge_cents:
-                    n = min(cfg.take_size, sell_size)
+                n = min(cfg.take_size, sell_size, _shown(book, "yes_bid_size"))
+                if edge >= cfg.take_edge_cents and n > 0:
                     plan.takes.append(("sell", bid, n))
                     sell_size -= n
         # -- rest quotes around (skewed) fair value

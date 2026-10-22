@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import feeds
+import ledger
+import pnl
 from config import CONFIG, BotConfig
 from kalshi_client import build_client, normalize_orderbook, top_of_book
 from market_maker import MarketMaker
@@ -99,6 +101,19 @@ class Engine:
         self.last_autopick = None
         self.logs = collections.deque(maxlen=LOG_LINES)
         logging.getLogger().addHandler(_RingLogHandler(self.logs))
+        # Positions live in the ledger, not in memory. On 2026-10-21 a restart
+        # started the bot from flat: it traded 2x past its limits, its exit
+        # quotes worked the wrong positions, and a 330-contract book it no
+        # longer knew about rode to settlement for −$87. Restored markets are
+        # watched so they can be worked down; the first auto-pick keeps them
+        # reduce-only if they're off the ladder.
+        restored = self.risk.restore(ledger.read_all_fills(), "paper" if config.kalshi.paper_trading else "live",
+                                     lambda t: pnl.check_settlement(self.client, t)[0])
+        for t in restored:
+            if t not in self.cfg.watched_tickers:
+                self.cfg.watched_tickers.append(t)
+        if restored:
+            log.info("Restored open positions from the ledger: %s", restored)
 
     # ---- control -----------------------------------------------------------
 
@@ -395,8 +410,9 @@ class Engine:
                     with self.lock:
                         self.maker.process_trades(ticker, pending[ticker])
                 # One take per market per book update: the bot reprices many
-                # times a second but a REST book refreshes every 0.4s — taking
-                # again at an offer we just lifted would count liquidity twice.
+                # times a second but a REST book refreshes every 0.4s, and a
+                # live take only shows up in the next one. (Paper takes never
+                # show up; MarketMaker takes them off the touch size itself.)
                 version = book.get("version", book.get("ts"))
                 fresh_for_take = self._take_version.get(ticker) != version
                 with self.lock:

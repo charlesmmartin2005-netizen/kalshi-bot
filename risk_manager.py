@@ -13,6 +13,8 @@ Changes from the first build:
     cycle, marks open positions to the mid, halts the bot on the daily loss
     limit, and makes a market reduce-only on the single-market limit. In the
     first build both checks existed but nothing ever called them.
+  - Positions survive a restart: restore() rebuilds them from the fill
+    ledger. Before, a restarted bot believed it was flat (2026-10-21).
 """
 import logging
 from datetime import datetime, timezone
@@ -72,6 +74,24 @@ class RiskManager:
             if pnl <= -self.cfg.max_single_market_loss_usd and t not in self.reduce_only:
                 self.reduce_only[t] = f"market loss ${pnl:.2f}"
                 log.warning("Single-market loss limit on %s ($%.2f) — reduce-only", t, pnl)
+
+    def restore(self, fills: list, mode: str, is_settled) -> dict[str, int]:
+        """Rebuild open positions from the fill ledger after a restart, so
+        limits, exposure, skew and exit quotes start from what the bot really
+        holds instead of from flat. Replays `mode` fills ("paper" or "live")
+        and keeps markets with an open position that haven't settled
+        (is_settled(ticker) -> bool). Returns {ticker: net contracts}."""
+        replay: dict[str, MarketLedger] = {}
+        for f in fills:
+            if f.get("mode", "paper") != mode:
+                continue
+            ml = replay.setdefault(f["ticker"], MarketLedger(f["ticker"]))
+            ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"],
+                          f.get("liquidity", "maker") == "maker")
+        for t, ml in replay.items():
+            if ml.net_contracts and not is_settled(t):
+                self.positions[t] = ml
+        return {t: ml.net_contracts for t, ml in self.positions.items() if ml.net_contracts}
 
     def record_api_error(self, consecutive_errors: int):
         if consecutive_errors >= self.cfg.max_consecutive_errors:

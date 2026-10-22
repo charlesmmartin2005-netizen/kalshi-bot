@@ -353,6 +353,7 @@ class KalshiStream(_WsThread):
         # The stream is only used while healthy (a message within 30s), and
         # an unchanged book is still current — so its age is the stream's.
         return {"yes_bid": bid, "yes_ask": ask, "ts": time.time() if self.healthy else self.last_msg,
+                "yes_bid_size": yes[0][1] if yes else None, "yes_ask_size": no[0][1] if no else None,
                 "version": self.versions.get(ticker, 0),
                 "spread_cents": ask - bid if bid is not None and ask is not None else None,
                 "raw_yes_levels": yes, "raw_no_levels": no}
