@@ -458,14 +458,17 @@ function renderHeader() {
 
 function renderKpis() {
   const p = S.pnl, r = S.risk;
-  const net = p.net_usd, cls = net > 0 ? "up" : net < 0 ? "down" : "";
+  // Balance and net P&L include open positions at the current mid, so they
+  // move while a position is at risk, not only when a trade closes.
+  const net = p.equity_usd - p.starting_balance_usd, cls = net > 0 ? "up" : net < 0 ? "down" : "";
   const arrow = net > 0 ? ICON.up : net < 0 ? ICON.down : "";
   const exPct = Math.min(100, r.exposure_usd / r.max_exposure_usd * 100);
   const lossUsed = Math.max(0, -r.daily_pnl_usd), lossPct = Math.min(100, lossUsed / r.max_daily_loss_usd * 100);
   const open = p.markets.filter(m => m.net !== 0).length;
+  const unpriced = p.unmarked.length ? ` · <span class="down" title="${esc(p.unmarked.join(", "))}">${p.unmarked.length} open position${p.unmarked.length === 1 ? "" : "s"} not priced</span>` : "";
   $("kpis").innerHTML = `
-    <div class="panel kpi hero"><div class="label">Paper balance</div><div class="value">${usd(p.balance_usd)}</div><div class="sub">from ${usd(p.starting_balance_usd)} start</div></div>
-    <div class="panel kpi"><div class="label">Net P&amp;L</div><div class="value ${cls}">${arrow ? `<span style="font-size:14px">${arrow}</span> ` : ""}${usd(net, true)}</div><div class="sub">${usd(p.realized_usd, true)} realized · ${usd(p.fees_usd)} fees</div></div>
+    <div class="panel kpi hero"><div class="label">Paper balance</div><div class="value">${usd(p.equity_usd)}</div><div class="sub">from ${usd(p.starting_balance_usd)} start · open positions at mid${unpriced}</div></div>
+    <div class="panel kpi"><div class="label">Net P&amp;L</div><div class="value ${cls}">${arrow ? `<span style="font-size:14px">${arrow}</span> ` : ""}${usd(net, true)}</div><div class="sub">${usd(p.realized_usd, true)} realized · ${usd(p.unrealized_usd, true)} open · ${usd(p.fees_usd)} fees</div></div>
     <div class="panel kpi"><div class="label">Fills</div><div class="value">${p.fill_count}</div><div class="sub">${open} open position${open === 1 ? "" : "s"}</div></div>
     <div class="panel kpi"><div class="label">Exposure</div><div class="value">${usd(r.exposure_usd)}</div><div class="meter ${exPct > 80 ? "hot" : ""}"><i style="width:${exPct}%"></i></div><div class="sub">of ${usd(r.max_exposure_usd)} limit</div></div>
     <div class="panel kpi"><div class="label">Daily loss budget</div><div class="value">${usd(r.max_daily_loss_usd - lossUsed)}</div><div class="meter ${lossPct > 60 ? "hot" : ""}"><i style="width:${lossPct}%"></i></div><div class="sub">left of ${usd(r.max_daily_loss_usd)}</div></div>`;
@@ -475,7 +478,9 @@ function renderEquity(force=false) {
   if (!force && $("equity").matches(":hover")) return;
   const c = S.pnl.equity_curve;
   const vals = c.length ? [{x: c[0].ts - 1, y: S.pnl.starting_balance_usd}, ...c.map(p => ({x: p.ts, y: p.balance}))] : [];
-  $("eqRange").textContent = c.length ? `${dt(c[0].ts)} → ${dt(c[c.length-1].ts)}` : "";
+  // Points are closed trades only (no price history for open positions);
+  // the last one is now, with open positions at mid.
+  $("eqRange").textContent = c.length ? `${dt(c[0].ts)} → ${dt(c[c.length-1].ts)}${S.pnl.unrealized_usd ? " · last point incl. open positions" : ""}` : "";
   if (vals.length < 2) { $("equity").innerHTML = `<div class="empty" style="height:240px;display:grid;place-items:center"><div><b>No fills yet.</b><br>The equity curve starts with the first paper fill.</div></div>`; return; }
   lineChart($("equity"), {series: [{name: "Balance", color: "var(--equity)", values: vals}], height: 240, area: true, yFmt: (v) => "$" + v.toFixed(2), xFmt: dt});
 }
@@ -574,8 +579,10 @@ function renderLedger() {
       p.recent_fills.map(f => `<tr><td class="num">${dt(f.ts)}</td><td><span class="tkc">${esc(f.ticker)}</span></td><td><span class="sq" style="background:${f.action === "buy" ? "var(--bid)" : "var(--ask)"}"></span> ${esc(f.action)} ${esc(f.side)}</td><td class="n">${f.count}</td><td class="n">${f.price_cents}¢</td><td>${esc(f.mode)} · ${esc(f.liquidity || "maker")}${f.strategy ? " · " + esc(f.strategy) : ""}</td></tr>`).join("")
     }</tbody></table>` : `<div class="empty">No fills recorded yet.</div>`;
   } else {
-    $("ledger").innerHTML = p.markets.length ? `<table><thead><tr><th>Ticker</th><th class="n">Fills</th><th class="n">Net</th><th class="n">Avg cost</th><th class="n">Realized</th><th class="n">Fees</th><th>Note</th></tr></thead><tbody>${
-      p.markets.map(m => `<tr><td><span class="tkc">${esc(m.ticker)}</span></td><td class="n">${m.fills}</td><td class="n">${m.net}</td><td class="n">${m.avg_cost}¢</td><td class="n ${m.realized_usd > 0 ? "up" : m.realized_usd < 0 ? "down" : ""}">${usd(m.realized_usd, true)}</td><td class="n">${usd(m.fees_usd)}</td><td>${esc(m.note)}</td></tr>`).join("")
+    const openCell = (m) => m.open_usd == null ? `<td class="n">${m.net ? "not priced" : ""}</td>`
+      : `<td class="n ${m.open_usd > 0 ? "up" : m.open_usd < 0 ? "down" : ""}" title="marked at ${m.mark}¢">${usd(m.open_usd, true)}</td>`;
+    $("ledger").innerHTML = p.markets.length ? `<table><thead><tr><th>Ticker</th><th class="n">Fills</th><th class="n">Net</th><th class="n">Avg cost</th><th class="n">Realized</th><th class="n">Open</th><th class="n">Fees</th><th>Note</th></tr></thead><tbody>${
+      p.markets.map(m => `<tr><td><span class="tkc">${esc(m.ticker)}</span></td><td class="n">${m.fills}</td><td class="n">${m.net}</td><td class="n">${m.avg_cost}¢</td><td class="n ${m.realized_usd > 0 ? "up" : m.realized_usd < 0 ? "down" : ""}">${usd(m.realized_usd, true)}</td>${openCell(m)}<td class="n">${usd(m.fees_usd)}</td><td>${esc(m.note)}</td></tr>`).join("")
     }</tbody></table>` : `<div class="empty">No markets traded yet.</div>`;
   }
 }

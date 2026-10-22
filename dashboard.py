@@ -24,7 +24,7 @@ import pnl
 import scanner
 from config import CONFIG
 from engine import Engine
-from kalshi_client import build_client
+from kalshi_client import build_client, top_of_book
 
 HOST, PORT = "127.0.0.1", 8050
 STATIC = Path(__file__).parent / "static"
@@ -40,6 +40,37 @@ engine = Engine(CONFIG)
 _cache = {"pnl": (0.0, None)}
 _cache_lock = threading.Lock()
 PNL_TTL = 5.0
+MARK_MAX_AGE = 10.0   # seconds an engine book still counts as the current price
+
+
+def _mid(bid, ask):
+    """Mid of a book; a missing side counts as 0¢ / 100¢ (e.g. no bids
+    under a nearly worthless strike)."""
+    if bid is None and ask is None:
+        return None
+    return ((bid or 0) + (ask if ask is not None else 100)) / 2
+
+
+def _marks(tickers):
+    """Current mid for each open position: the engine's book while it's
+    fresh, otherwise one batched REST request (e.g. while the bot is
+    stopped, or for a market it no longer watches)."""
+    out, missing, now = {}, [], time.time()
+    with engine.lock:
+        for t in tickers:
+            b = engine.books.get(t)
+            if b and now - b["updated"] < MARK_MAX_AGE:
+                out[t] = _mid(b["yes_bid"], b["yes_ask"])
+            if out.get(t) is None:
+                missing.append(t)
+    if missing:
+        try:
+            for m in engine.client.get_markets_batch(missing):
+                b = top_of_book(m)
+                out[m["ticker"]] = _mid(b["yes_bid"], b["yes_ask"])
+        except Exception as e:
+            logging.getLogger("dashboard").warning("Couldn't price open positions: %s", e)
+    return out
 
 
 def _pnl_summary():
@@ -47,18 +78,22 @@ def _pnl_summary():
         ts, value = _cache["pnl"]
         if value is not None and time.time() - ts < PNL_TTL:
             return value
-    s = pnl.compute(client=engine.client)
+    s = pnl.compute(client=engine.client, get_marks=_marks)
     value = {
         "balance_usd": s["balance_usd"],
+        "equity_usd": s["equity_usd"],
         "starting_balance_usd": s["starting_balance_usd"],
         "net_usd": s["net_usd"],
         "realized_usd": s["realized_usd"],
+        "unrealized_usd": s["unrealized_usd"],
+        "unmarked": s["unmarked"],
         "fees_usd": s["fees_usd"],
         "fill_count": s["fill_count"],
         "equity_curve": s["equity_curve"],
         "markets": [
             {"ticker": ml.ticker, "fills": ml.fill_count, "net": ml.net_contracts,
              "avg_cost": round(ml.avg_cost_cents, 1), "realized_usd": ml.realized_pnl_cents / 100,
+             "mark": ml.mark_cents, "open_usd": ml.unrealized_pnl_cents / 100 if ml.mark_cents is not None else None,
              "fees_usd": ml.total_fees_cents / 100, "note": ml.settlement_note}
             for ml in s["markets"]
         ],

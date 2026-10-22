@@ -33,6 +33,9 @@ class MarketLedger:
         self.fill_count = 0
         self.settled = False
         self.settlement_note = ""
+        # Open position valued at the current mid (compute(get_marks=...)).
+        self.mark_cents = None
+        self.unrealized_pnl_cents = 0.0
 
     def apply_fill(self, side, action, count, price_cents, maker=True):
         self.fill_count += 1
@@ -111,9 +114,14 @@ def _is_maker(fill: dict) -> bool:
     return fill.get("liquidity", "maker") == "maker"
 
 
-def compute(client=None, fills=None) -> dict:
+def compute(client=None, fills=None, get_marks=None) -> dict:
     """Replay the ledger into per-market ledgers and portfolio totals. Pass
-    a client to book settlements for open positions in resolved markets."""
+    a client to book settlements for open positions in resolved markets, and
+    get_marks(tickers) -> {ticker: mid_cents} to value the positions still
+    open. balance_usd / net_usd stay realized-only; equity_usd adds the open
+    positions. Without that the dashboard balance only moved when a trade
+    closed: on 2026-10-21 it read +$50 while the bot held a book that
+    settled for −$112."""
     fills = ledger.read_all_fills() if fills is None else fills
     by_ticker: dict[str, MarketLedger] = {}
     for f in fills:
@@ -127,24 +135,41 @@ def compute(client=None, fills=None) -> dict:
                 if is_final:
                     ml.settle(settle_price, result)
 
+    open_tickers = [t for t, ml in by_ticker.items() if ml.net_contracts]
+    marks = get_marks(open_tickers) if get_marks and open_tickers else {}
+    unmarked = []
+    for t in open_tickers:
+        ml = by_ticker[t]
+        if marks.get(t) is None:
+            unmarked.append(t)
+            continue
+        ml.mark_cents = marks[t]
+        ml.unrealized_pnl_cents = ml.net_contracts * (ml.mark_cents - ml.avg_cost_cents)
+
     realized = sum(ml.realized_pnl_cents for ml in by_ticker.values())
     fees = sum(ml.total_fees_cents for ml in by_ticker.values())
     net_usd = (realized - fees) / 100
+    unrealized_usd = sum(ml.unrealized_pnl_cents for ml in by_ticker.values()) / 100
+    equity_usd = STARTING_BALANCE_USD + net_usd + unrealized_usd
 
     # Equity curve: balance after each fill, for the dashboard chart. Uses
-    # trade-level realized P&L only (settlements land at the end).
+    # trade-level realized P&L only (there's no price history for the open
+    # positions); the last point is now, with settlements and open positions.
     curve, running = [], MarketLedgerSet()
     for f in fills:
         running.apply(f)
         curve.append({"ts": f["ts"], "balance": STARTING_BALANCE_USD + running.net_usd()})
-    if curve and abs(curve[-1]["balance"] - (STARTING_BALANCE_USD + net_usd)) > 1e-9:
-        curve.append({"ts": time.time(), "balance": STARTING_BALANCE_USD + net_usd})
+    if curve and abs(curve[-1]["balance"] - equity_usd) > 1e-9:
+        curve.append({"ts": time.time(), "balance": equity_usd})
 
     return {
         "markets": sorted(by_ticker.values(), key=lambda ml: -ml.realized_pnl_cents),
         "realized_usd": realized / 100,
         "fees_usd": fees / 100,
         "net_usd": net_usd,
+        "unrealized_usd": unrealized_usd,
+        "unmarked": unmarked,
+        "equity_usd": equity_usd,
         "starting_balance_usd": STARTING_BALANCE_USD,
         "balance_usd": STARTING_BALANCE_USD + net_usd,
         "fill_count": len(fills),
