@@ -19,13 +19,16 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request, send_from_directory
 
 import arb
 import ledger
+import markouts
 import pnl
 import scanner
 from config import CONFIG
@@ -36,6 +39,7 @@ HOST, PORT = "127.0.0.1", 8050
 STATIC = Path(__file__).parent / "static"
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+ET = ZoneInfo("America/New_York")   # Kalshi's event times
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -92,12 +96,71 @@ def _marks(tickers):
     return out
 
 
+def _settlement(markets):
+    """Open positions grouped by event, with what each band pays at settlement
+    (pnl.settlement_bands). Only "above the strike" markets, like the BTC ladder."""
+    events = {}
+    for ml in markets:
+        if not ml.net_contracts or ml.settled:
+            continue
+        info = engine.market_info.get(ml.ticker, {})
+        strike, kind = info.get("floor_strike"), info.get("strike_type")
+        if strike is None:          # no longer watched: read it off the ticker (…-T81249.99)
+            part = ml.ticker.rsplit("-", 1)[-1]
+            try:
+                strike, kind = (float(part[1:]), "greater") if part.startswith("T") else (None, None)
+            except ValueError:
+                strike = None
+        if kind != "greater" or strike is None:
+            continue
+        ev = ml.ticker.rsplit("-", 1)[0]
+        e = events.setdefault(ev, {"event": ev, "close_time": None, "positions": []})
+        e["close_time"] = e["close_time"] or info.get("close_time")
+        e["positions"].append({"ticker": ml.ticker, "strike": strike, "net": ml.net_contracts,
+                               "avg_cost": round(ml.avg_cost_cents, 2)})
+    for e in events.values():
+        e["close_time"] = e["close_time"] or _event_close(e["event"])
+        e["bands"] = pnl.settlement_bands([(p["strike"], p["net"], p["avg_cost"]) for p in e["positions"]])
+    return sorted(events.values(), key=lambda e: e["close_time"] or e["event"])
+
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
+
+
+def _event_close(event_ticker):
+    """Close time from an event ticker like KXBTCD-26OCT2217 (Oct 22 2026, 5pm ET)."""
+    code = event_ticker.rsplit("-", 1)[-1]
+    try:
+        return datetime(2000 + int(code[:2]), _MONTHS[code[2:5]], int(code[5:7]), int(code[7:9]),
+                        tzinfo=ET).isoformat()
+    except (KeyError, ValueError):
+        return None
+
+
+def _today_usd(fills, equity_usd):
+    """Equity now minus the account at midnight ET: fills before midnight,
+    plus the settlement of every market that closed before it. (The equity
+    curve can't give this: it books settlements at its end.)"""
+    since = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    start = pnl.compute(fills=[f for f in fills if f["ts"] < since])
+    for ml in start["markets"]:
+        close = _event_close(ml.ticker.rsplit("-", 1)[0])
+        if ml.net_contracts and close and datetime.fromisoformat(close).timestamp() <= since:
+            final, price, result = pnl.check_settlement(engine.client, ml.ticker)
+            if final:
+                ml.settle(price, result)
+    base = sum(ml.realized_pnl_cents - ml.total_fees_cents for ml in start["markets"]) / 100
+    return round(equity_usd - (pnl.STARTING_BALANCE_USD + base), 2)
+
+
 def _pnl_summary():
     with _cache_lock:
         ts, value = _cache["pnl"]
         if value is not None and time.time() - ts < PNL_TTL:
             return value
-    s = pnl.compute(client=engine.client, get_marks=_marks)
+    fills = ledger.read_all_fills()
+    s = pnl.compute(client=engine.client, fills=fills, get_marks=_marks)
     value = {
         "balance_usd": s["balance_usd"],
         "equity_usd": s["equity_usd"],
@@ -116,7 +179,9 @@ def _pnl_summary():
              "fees_usd": ml.total_fees_cents / 100, "note": ml.settlement_note}
             for ml in s["markets"]
         ],
-        "recent_fills": ledger.read_all_fills()[-40:][::-1],
+        "recent_fills": fills[-40:][::-1],
+        "settlement": _settlement(s["markets"]),
+        "today_usd": _today_usd(fills, s["equity_usd"]),
     }
     with _cache_lock:
         _cache["pnl"] = (time.time(), value)
@@ -131,6 +196,11 @@ def _result(ok_msg):
 @app.get("/")
 def index():
     return send_from_directory(STATIC, "index.html")
+
+
+@app.get("/static/<path:name>")
+def static_file(name):
+    return send_from_directory(STATIC, name)
 
 
 @app.get("/api/state")
@@ -195,6 +265,39 @@ def scan():
 @app.get("/api/arb")
 def arbitrage():
     return jsonify({**(_sweep["arb"] or {"confirmed": [], "ts": None}), "running": _sweep["running"]})
+
+
+# ---- today's markouts (Edge view) -------------------------------------------
+# One candle request per traded market, so refreshed in the background at
+# most every MARKOUT_TTL, on the low-priority client.
+
+MARKOUT_TTL = 300
+_mk ={"ts": 0.0, "value": None, "running": False, "settled": {}}
+
+
+def _refresh_markouts():
+    try:
+        since = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        mode = "paper" if CONFIG.kalshi.paper_trading else "live"
+        fills = [f for f in ledger.read_all_fills() if f.get("mode", "paper") == mode and f["ts"] >= since]
+        scored = markouts.score(SWEEP_CLIENT, fills, _mk["settled"])
+        _mk["value"] = {"since": since, "fills": len(fills), "horizons": list(markouts.HORIZONS),
+                        "by_liquidity": markouts.by(scored, lambda f: f.get("liquidity", "maker")),
+                        "updated": time.time(), "error": None}
+    except Exception as e:
+        log.warning("Markouts failed: %s", e)
+        _mk["value"] = {**(_mk["value"] or {}), "error": str(e)}
+    finally:
+        _mk["ts"] = time.time()
+        _mk["running"] = False
+
+
+@app.get("/api/markouts")
+def markout_summary():
+    if not _mk["running"] and time.time() - _mk["ts"] > MARKOUT_TTL:
+        _mk["running"] = True
+        threading.Thread(target=_refresh_markouts, name="markouts", daemon=True).start()
+    return jsonify({**(_mk["value"] or {}), "running": _mk["running"]})
 
 
 @app.post("/api/start")

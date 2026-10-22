@@ -92,7 +92,8 @@ until you reset it on the dashboard.
 | `ledger.py` / `pnl.py` | Fill log and average-cost, settlement-aware P&L |
 | `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429 |
 | `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) and the Kalshi websocket (needs an API key) |
-| `dashboard.py` + `static/index.html` | Local web dashboard |
+| `dashboard.py` + `static/index.html` | Local web dashboard: Overview (today, settlement payout), Ladder, Edge (markouts vs history), Activity (ledger, settings, log), Scanner |
+| `markouts.py` | Scores fills by how the market moved 1, 5 and 60 minutes later (Edge view, `research/paper_markouts.py`) |
 | `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |

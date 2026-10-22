@@ -177,6 +177,22 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
     }
 
 
+def settlement_bands(positions) -> list:
+    """What an event's open book pays at settlement, band by band.
+
+    positions: [(strike, net_contracts, avg_cost_cents)] for one event's
+    "above the strike" markets. Returns [{"lo", "hi", "pnl_usd"}] from the
+    lowest band up: the coin settling above `lo` (None = below every strike)
+    and at or below `hi` (None = above every strike) pays `pnl_usd`."""
+    strikes = sorted({k for k, _, _ in positions})
+    edges = [None] + strikes + [None]
+    bands = []
+    for lo, hi in zip(edges, edges[1:]):
+        cents = sum(net * ((100 if lo is not None and k <= lo else 0) - avg) for k, net, avg in positions)
+        bands.append({"lo": lo, "hi": hi, "pnl_usd": round(cents / 100, 2)})
+    return bands
+
+
 class MarketLedgerSet:
     """Incremental replay helper used to build the equity curve."""
     def __init__(self):

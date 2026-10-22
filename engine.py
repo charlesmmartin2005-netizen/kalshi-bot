@@ -15,10 +15,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+import autopick
 import feeds
 import ledger
 import pnl
 from config import CONFIG, BotConfig
+from fair_value import CRYPTO_MIN_HOURS_TO_TRADE
 from kalshi_client import build_client, normalize_orderbook, top_of_book
 from market_maker import MarketMaker
 from risk_manager import RiskManager
@@ -220,7 +222,6 @@ class Engine:
     def autopick(self) -> tuple[bool, str]:
         """Replace the watchlist with autopick's choices. Markets the bot
         still holds a position in are kept, so it can finish exiting."""
-        import autopick
         res = autopick.pick(self.client)
         picks = [p["ticker"] for p in res["picks"]]
         with self.lock:
@@ -498,6 +499,10 @@ class Engine:
                     "ticker": t,
                     "title": info.get("title", ""),
                     "subtitle": info.get("yes_sub_title", ""),
+                    "event": info.get("event_ticker"),
+                    "strike": info.get("floor_strike"),
+                    "strike_type": info.get("strike_type"),
+                    "open_time": info.get("open_time"),
                     "close_time": info.get("close_time"),
                     "book": self.books.get(t),
                     "history": list(self.history.get(t, [])),
@@ -550,6 +555,8 @@ class Engine:
                     "delta_lean_cents": r.delta_lean_cents, "delta_lean_ref_usd": r.delta_lean_ref_usd,
                     "take_size": r.take_size,
                     "enable_taking": r.enable_taking, "take_edge_cents": r.take_edge_cents,
+                    "model_stop_hours": CRYPTO_MIN_HOURS_TO_TRADE,
+                    "pick_window_hours": autopick.MAX_HOURS,
                 },
                 "markets": markets,
                 "logs": list(self.logs)[-120:],
