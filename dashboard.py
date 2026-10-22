@@ -1,19 +1,25 @@
 """
 Web dashboard for the bot. Run with:
 
-    python dashboard.py
+    python dashboard.py                              # opens the page; click Start to trade
+    python dashboard.py --autostart --no-browser     # unattended: trades straight away (run-bot.ps1)
 
 then open http://127.0.0.1:8050 (it opens automatically). The bot runs on a
-background thread inside this process; the page polls /api/state.
+background thread inside this process; the page polls /api/state. Logs go to
+logs/bot.log as well as the console.
 
 Binds to localhost only — the control endpoints can start/stop trading, so
-never expose this port to a network.
+never expose this port to a network. Only one dashboard runs at a time: a
+second one finds the port taken and exits, so two bots never trade the same
+ledger.
 """
 import logging
+import socket
 import sys
 import threading
 import time
 import webbrowser
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -28,9 +34,22 @@ from kalshi_client import build_client, top_of_book
 
 HOST, PORT = "127.0.0.1", 8050
 STATIC = Path(__file__).parent / "static"
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
+# An unattended bot has no console to read, so keep a log file too
+# (5 MB x 4 files at most).
+LOG_DIR.mkdir(exist_ok=True)
+_log_file = RotatingFileHandler(LOG_DIR / "bot.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+_log_file.setFormatter(logging.Formatter(LOG_FORMAT))
+logging.getLogger().addHandler(_log_file)
+if "--autostart" in sys.argv:
+    # Unattended: the file is the record, and run-bot.ps1 keeps stderr for crashes.
+    for h in [h for h in logging.getLogger().handlers if type(h) is logging.StreamHandler]:
+        logging.getLogger().removeHandler(h)
+log = logging.getLogger("dashboard")
 
 app = Flask(__name__, static_folder=None)
 engine = Engine(CONFIG)
@@ -218,13 +237,36 @@ def remove_ticker(ticker):
     return _result(engine.remove_ticker(ticker))
 
 
+def _port_taken() -> bool:
+    with socket.socket() as s:
+        return s.connect_ex((HOST, PORT)) == 0
+
+
+def _autostart():
+    ok, msg = engine.start()
+    log.info("Autostart: %s", msg if ok else f"not started ({msg})")
+
+
 if __name__ == "__main__":
     url = f"http://{HOST}:{PORT}"
+    if _port_taken():
+        # e.g. the hidden bot run-bot.ps1 keeps running: open that one
+        # instead of starting a second bot on the same ledger.
+        log.info("Dashboard already running at %s — not starting another", url)
+        if "--no-browser" not in sys.argv:
+            webbrowser.open(url)
+        sys.exit(1)
     print(f"\n  Kalshi MM dashboard → {url}   ({engine.mode} mode)\n")
+    log.info("Dashboard starting (%s mode, %s)", engine.mode, " ".join(sys.argv[1:]) or "no options")
     threading.Thread(target=_sweeper, name="sweeper", daemon=True).start()
+    if "--autostart" in sys.argv:
+        threading.Timer(2.0, _autostart).start()      # once the server is up
     if "--no-browser" not in sys.argv:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         app.run(host=HOST, port=PORT, threaded=True, use_reloader=False)
+    except Exception:
+        log.exception("Dashboard crashed")
+        raise
     finally:
         engine.stop("dashboard closed")

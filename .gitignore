@@ -7,3 +7,5 @@ arb_log.jsonl
 research/cache*/
 .venv/
 __pycache__/
+logs/
+halted.txt

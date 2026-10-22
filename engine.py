@@ -13,6 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 
 import feeds
 import ledger
@@ -24,6 +25,10 @@ from risk_manager import RiskManager
 
 log = logging.getLogger("engine")
 
+# A halt (kill switch or loss limit) is written here and survives restarts:
+# with run-bot.ps1 restarting the dashboard and --autostart, a crash or a
+# reboot would otherwise quietly resume trading. Reset on the dashboard.
+HALT_FILE = Path(__file__).parent / "halted.txt"
 PRICE_HISTORY_POINTS = 180   # per ticker
 HISTORY_EVERY_SECONDS = 1.0  # one chart point per second (~3 minutes shown)
 LOG_LINES = 300
@@ -114,6 +119,10 @@ class Engine:
                 self.cfg.watched_tickers.append(t)
         if restored:
             log.info("Restored open positions from the ledger: %s", restored)
+        if HALT_FILE.exists():
+            self.risk.halted = True
+            self.risk.halt_reason = f"{HALT_FILE.read_text().strip()} (still halted after a restart)"
+            log.warning("Bot is halted: %s — reset the kill switch to trade", self.risk.halt_reason)
 
     # ---- control -----------------------------------------------------------
 
@@ -171,9 +180,13 @@ class Engine:
         log.info("Engine stopped (%s)", reason)
         return True, "stopped"
 
+    def _save_halt(self):
+        HALT_FILE.write_text(f"{self.risk.halt_reason} ({datetime.now():%Y-%m-%d %H:%M})\n")
+
     def kill(self) -> tuple[bool, str]:
         """Manual kill switch: halt the risk manager and pull every quote."""
         self.risk._halt("manual kill switch")
+        self._save_halt()
         if self.running:
             self.stop("kill switch")
         else:
@@ -185,6 +198,7 @@ class Engine:
         with self.lock:
             self.risk.halted = False
             self.risk.halt_reason = ""
+            HALT_FILE.unlink(missing_ok=True)
         log.info("Kill switch reset")
         return True, "reset"
 
@@ -298,6 +312,8 @@ class Engine:
                 with self.lock:
                     self.maker.cancel_all("kill switch")
                     self.running = False
+                    if not HALT_FILE.exists():
+                        self._save_halt()
                 return
             self._wake.wait(REPRICE_HEARTBEAT_SECONDS)
             self._wake.clear()

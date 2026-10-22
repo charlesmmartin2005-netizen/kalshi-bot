@@ -49,6 +49,31 @@ Double-click `start-dashboard.bat`, or:
 Paper mode needs no API key. To trade live you need a key in `.env`, and
 you should read "Before going live" first.
 
+## Run unattended
+
+A scheduled task, **Kalshi bot**, runs `run-bot.ps1` hidden at every logon.
+That script starts `dashboard.py --autostart --no-browser` (trading starts by
+itself) and starts it again 10 seconds after it exits for any reason. Open
+positions come back from `fills_log.jsonl`, so a restart is safe. The
+dashboard is still at http://127.0.0.1:8050; double-clicking
+`start-dashboard.bat` while the bot runs just opens it, because a second
+dashboard won't start on a taken port.
+
+```
+powershell -ExecutionPolicy Bypass -File stop-bot.ps1     # stop (until next logon)
+powershell -Command "Start-ScheduledTask -TaskName 'Kalshi bot'"   # start again now
+powershell -Command "Unregister-ScheduledTask -TaskName 'Kalshi bot' -Confirm:$false"   # remove the task
+```
+
+Logs: `logs\bot.log` (everything the dashboard shows, 5 MB × 4 files),
+`logs\launcher.log` (each start and exit), `logs\crash.log` (Python errors).
+
+The bot stops while the PC sleeps: set Settings → System → Power & battery →
+"Make my device sleep after" (plugged in) to Never. After a reboot it comes
+back when you log in. The kill switch still holds: a halt (button or loss
+limit) is saved to `halted.txt`, so the bot stays halted across restarts
+until you reset it on the dashboard.
+
 ## Files
 
 | File | Role |
@@ -68,6 +93,7 @@ you should read "Before going live" first.
 | `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429 |
 | `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) and the Kalshi websocket (needs an API key) |
 | `dashboard.py` + `static/index.html` | Local web dashboard |
+| `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
 | `research/paper_markouts.py` | Scores every paper fill by how the market moved 1, 5 and 60 minutes later, net of fees |
