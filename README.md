@@ -37,7 +37,18 @@ All strategies share the same risk rules:
 
 ## Run it
 
-Double-click `start-dashboard.bat`, or:
+**As a desktop app:** run `install-app.ps1` once. Then open **Kalshi bot**
+from the Desktop or the Start menu: the dashboard opens in a window of its
+own (Edge in app mode, no tabs or address bar). If the bot isn't running it
+starts first, with a small "Starting the bot" window for a few seconds.
+Closing the window doesn't stop the bot.
+
+```
+powershell -ExecutionPolicy Bypass -File install-app.ps1              # shortcuts + the always-on task
+powershell -ExecutionPolicy Bypass -File install-app.ps1 -Uninstall   # stop the bot, remove both
+```
+
+Or double-click `start-dashboard.bat`, or:
 
 ```
 .venv\Scripts\python.exe dashboard.py     # dashboard → http://127.0.0.1:8050
@@ -54,8 +65,11 @@ you should read "Before going live" first.
 
 ## Run unattended
 
-A scheduled task, **Kalshi bot**, runs `run-bot.ps1` hidden at every logon.
-That script starts `dashboard.py --autostart --no-browser` (trading starts by
+A scheduled task, **Kalshi bot** (installed by `install-app.ps1`), runs
+`run-bot.ps1` at every logon in a console with no window, so there's
+nothing to close by accident. (It used to run `powershell -WindowStyle
+Hidden`, which Windows Terminal shows as a window anyway; closing that
+window stopped the bot from Oct 22 to Oct 25.) That script starts `dashboard.py --autostart --no-browser` (trading starts by
 itself) and starts it again 10 seconds after it exits for any reason. Open
 positions come back from `fills_log.jsonl`, so a restart is safe. The
 dashboard is still at http://127.0.0.1:8050; double-clicking
@@ -65,7 +79,7 @@ dashboard won't start on a taken port.
 ```
 powershell -ExecutionPolicy Bypass -File stop-bot.ps1     # stop (until next logon)
 powershell -Command "Start-ScheduledTask -TaskName 'Kalshi bot'"   # start again now
-powershell -Command "Unregister-ScheduledTask -TaskName 'Kalshi bot' -Confirm:$false"   # remove the task
+powershell -ExecutionPolicy Bypass -File install-app.ps1 -Uninstall   # stop it and remove the task and shortcuts
 ```
 
 Logs: `logs\bot.log` (everything the dashboard shows, 5 MB × 4 files),
@@ -98,6 +112,8 @@ until you reset it on the dashboard.
 | `dashboard.py` + `static/index.html` | Local web dashboard: Overview (today, settlement payout), Ladder, Edge (markouts vs history), Activity (ledger, settings, log), Scanner |
 | `markouts.py` | Scores fills by how the market moved 1, 5 and 60 minutes later (Edge view, `research/paper_markouts.py`) |
 | `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
+| `open_app.py` / `install-app.ps1` | Desktop app: opens the dashboard in its own window, starting the bot if it's down / installs its shortcuts and the always-on task |
+| `static/icon*`, `static/manifest.json` | App icon and web manifest |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
 | `research/paper_markouts.py` | Scores every paper fill by how the market moved 1, 5 and 60 minutes later, net of fees |

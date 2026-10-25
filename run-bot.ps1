@@ -1,8 +1,8 @@
 # Keeps the bot running unattended: starts the dashboard with trading on (no
 # browser tab) and starts it again 10 seconds after it exits for any reason.
-# The "Kalshi bot" scheduled task runs this hidden at logon (README, "Run
-# unattended"); stop-bot.ps1 stops it. The dashboard stays at
-# http://127.0.0.1:8050.
+# The "Kalshi bot" scheduled task (install-app.ps1) runs this at logon in a
+# console with no window (README, "Run unattended"); stop-bot.ps1 stops it.
+# The dashboard stays at http://127.0.0.1:8050.
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force logs | Out-Null
 
