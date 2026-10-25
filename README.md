@@ -14,12 +14,12 @@ trade tape and recorded in `fills_log.jsonl`.
 | **Arbitrage** (`arb.py`) | Every mutually-exclusive event and strike ladder | Locked-in payoffs. Detection only; not auto-executed. |
 
 Since 2026-10-20 the fair-value strategy runs as **rolling ladder + delta
-lean** (backtest and comparison in `research/README.md`):
+lean** (backtest and comparison in [research/README.md](research/README.md)):
 - **Rolling ladder:** auto-pick watches the 6 BTC strikes nearest the money. Auto-rotate (on by default) re-centres them every 15 minutes. A market rolled off with a position goes reduce-only until it's flat.
 - **Size:** 15-contract quotes and takes, up to 75 per market, $450 total exposure.
 - **Delta lean:** the bot sums the dollars its whole book gains or loses per 1% coin move, and leans *resting quotes* (not takes) against it, by up to 4¢ at $30/1%.
 
-Since 2026-10-22 (research/README.md): **BTC only** (ETH dropped), **resting
+Since 2026-10-22 ([research/README.md](research/README.md)): **BTC only** (ETH dropped), **resting
 quotes at least 6¢ from fair value** (was ~3.75¢ at 50¢), and **makers pay
 no fee**, matching Kalshi's fee schedule for these series. Quotes that
 unwind a position never cross the model (skew and lean used to pull them
@@ -61,7 +61,7 @@ Or double-click `start-dashboard.bat`, or:
 ```
 
 Paper mode needs no API key. To trade live you need a key in `.env`, and
-you should read "Before going live" first.
+you should read [Before going live](#before-going-live) first.
 
 ## Run unattended
 
@@ -121,6 +121,13 @@ until you reset it on the dashboard.
 | `research/index_check.py` | Exchanges vs Kalshi's real settlement values |
 | `research/late_window.py` | Is the model tradeable in the last 2h? (no) |
 
+## Notes
+
+- [CLAUDE.md](CLAUDE.md): how Claude works in this repo: safety rules, how the code fits together, doc conventions
+- [Strategy lab](research/README.md): every backtest, fill model and result behind the strategy settings; read before changing one
+- [First scaffold README](archive/README.md): the bot's first version (archived, superseded by this file)
+- [First reference guide](archive/GUIDE.md): settings guide for the first version (archived; some of its files and settings no longer exist)
+
 ## Market data (2026-10-20)
 
 - **Event-driven repricing.** The bot wakes on every coin tick or Kalshi book change and re-quotes every market from the latest data in about 20ms. Before, it polled every 1–3 seconds.
@@ -157,7 +164,7 @@ until you reset it on the dashboard.
 
 ## What testing showed (2026-10-22)
 
-Details and numbers in `research/README.md`.
+Details and numbers in [research/README.md](research/README.md).
 - **The earlier backtests looked ahead.** `strategy_lab.py` and
   `backtest.py` filled resting quotes against trades from before the data
   the quotes were priced from. Fixed, the old live settings went from

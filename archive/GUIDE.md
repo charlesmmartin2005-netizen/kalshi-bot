@@ -1,5 +1,9 @@
 # Kalshi Market-Making Bot — Complete Reference Guide
 
+> [!NOTE]
+> Archived. This describes the bot's first scaffold. The current bot, its files and its settings
+> are in the [main README](../README.md); some files and settings named below no longer exist or have moved.
+
 Everything you can configure, what it does, and what values make sense.
 Keep this next to the code — when in doubt about what a setting does,
 check here before changing it.

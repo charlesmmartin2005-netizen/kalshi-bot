@@ -1,5 +1,9 @@
 # Kalshi Market-Making Bot — Starter Scaffold
 
+> [!NOTE]
+> Archived. This describes the bot's first scaffold. The current bot, its files and its settings
+> are in the [main README](../README.md); some files and settings named below no longer exist or have moved.
+
 A starting scaffold for a Kalshi market-making bot: quote inside the
 spread on watched markets, capture the edge, with hard risk limits and a
 paper-trading mode built in from the start.

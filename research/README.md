@@ -141,3 +141,5 @@ per market, resting quotes leaned up to 4¢ against the portfolio's coin
 delta (full lean at $30 per 1% move). The lab reported +$498.06 (Sep 19–Oct
 19) and +$548.16 (Aug 19–Sep 18) against +$16.76 / −$48.15 for the original
 settings. Corrected numbers are above.
+
+Related: [README](../README.md): the live settings and a summary of each round of testing
