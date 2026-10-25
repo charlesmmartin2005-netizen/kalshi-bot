@@ -369,12 +369,6 @@ class Engine:
                 self.market_info[t] = m
                 book = top_of_book(m)
                 book["ts"] = fetched_at
-                if t in futs:
-                    try:
-                        full = normalize_orderbook(futs[t].result())
-                        self._depth[t] = (full["raw_yes_levels"], full["raw_no_levels"])
-                    except Exception as e:
-                        log.warning("Depth for %s failed: %s", t, e)
                 book["raw_yes_levels"], book["raw_no_levels"] = self._depth.get(t, ([], []))
                 old = self._kbooks.get(t)
                 if not old or (old["yes_bid"], old["yes_ask"]) != (book["yes_bid"], book["yes_ask"]):
@@ -382,6 +376,19 @@ class Engine:
                 self._kbooks[t] = book
         if changed:
             self._wake.set()
+        # Depth is only for the dashboard's ladder, so the books above are
+        # published first and the lock isn't held while it downloads: it
+        # used to block repricing for ~0.6s every DEPTH_POLL_SECONDS.
+        for t, f in futs.items():
+            try:
+                full = normalize_orderbook(f.result())
+            except Exception as e:
+                log.warning("Depth for %s failed: %s", t, e)
+                continue
+            with self.lock:
+                self._depth[t] = (full["raw_yes_levels"], full["raw_no_levels"])
+                if (book := self._kbooks.get(t)) is not None:
+                    book["raw_yes_levels"], book["raw_no_levels"] = self._depth[t]
 
     def _queue_trades(self, ticker, rows):
         if rows:

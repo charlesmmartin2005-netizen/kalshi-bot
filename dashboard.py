@@ -13,8 +13,11 @@ never expose this port to a network. Only one dashboard runs at a time: a
 second one finds the port taken and exits, so two bots never trade the same
 ledger.
 """
+import json
 import logging
+import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -26,14 +29,12 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request, send_from_directory
 
-import arb
 import ledger
 import markouts
 import pnl
-import scanner
 from config import CONFIG
 from engine import Engine
-from kalshi_client import build_client, top_of_book
+from kalshi_client import KalshiClient, build_client, top_of_book
 
 HOST, PORT = "127.0.0.1", 8050
 STATIC = Path(__file__).parent / "static"
@@ -212,45 +213,51 @@ def state():
 
 
 # ---- background sweeps: scanner + arbitrage over all of Kalshi ------------
-# One full catalog download takes ~15s, so it never runs inside a request:
+# One full catalog download takes ~30s, so it never runs inside a request:
 # a worker refreshes both every SWEEP_SECONDS and the endpoints return the
-# latest result immediately.
+# latest result immediately. The sweep runs in its own process (sweep.py):
+# in this one, freeing each ~600 MB catalog froze the trading loop for 1-5s.
 
 SWEEP_SECONDS = 300
-# Sweeps share Kalshi's rate limit with trading, so they run low-priority.
+SWEEP_TIMEOUT = 600
+# The markouts refresh shares Kalshi's rate limit with trading, so it runs
+# low-priority.
 SWEEP_CLIENT = build_client(CONFIG)
 SWEEP_CLIENT.low_priority = True
 _sweep = {"scan": None, "arb": None, "running": False, "error": None}
 _sweep_wake = threading.Event()
 
 
-def _run_sweep(force_catalog: bool):
+def _run_sweep():
     _sweep["running"] = True
+    # Kalshi rate-limits both processes together: leave the sweep its share
+    # while it runs (sharing the full rate got trade-tape requests 429'd).
+    full_rps = KalshiClient.MAX_REQUESTS_PER_SECOND
+    KalshiClient.MAX_REQUESTS_PER_SECOND = full_rps - KalshiClient.LOW_PRIORITY_RPS
     try:
-        rows = scanner.scan(SWEEP_CLIENT, force=force_catalog)
-        suitable = [r for r in rows if r["tradeable"]]
-        _sweep["scan"] = {
-            "ts": time.time(), "markets_active": len(rows),
-            "counts": {s: sum(1 for r in suitable if r["strategy"] == s) for s in ("fair-value", "book")},
-            # top of each strategy list + the best rejected ones (for "why not")
-            "rows": ([r for r in suitable if r["strategy"] == "fair-value"][:40]
-                     + [r for r in suitable if r["strategy"] == "book"][:40]
-                     + [r for r in rows if not r["tradeable"]][:20]),
-        }
-        _sweep["arb"] = arb.scan(SWEEP_CLIENT)        # reuses the catalog just loaded
+        r = subprocess.run([sys.executable, "sweep.py"], cwd=Path(__file__).parent, capture_output=True,
+                           encoding="utf-8", errors="replace", timeout=SWEEP_TIMEOUT,
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr.strip().splitlines() or [f"exit code {r.returncode}"])[-1])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        _sweep["scan"], _sweep["arb"] = out["scan"], out["arb"]
         _sweep["error"] = None
+        log.info("Sweep: %d active markets, %d arbitrage candidates in %.0fs", out["scan"]["markets_active"],
+                 out["arb"].get("candidates", 0), out["seconds"])
     except Exception as e:
-        logging.getLogger("dashboard").exception("Sweep failed")
+        log.exception("Sweep failed")
         _sweep["error"] = str(e)
     finally:
+        KalshiClient.MAX_REQUESTS_PER_SECOND = full_rps
         _sweep["running"] = False
 
 
 def _sweeper():
-    force = True
     while True:
-        _run_sweep(force)
-        force = _sweep_wake.wait(SWEEP_SECONDS)    # True if woken by "Rescan"
+        _run_sweep()
+        _sweep_wake.wait(SWEEP_SECONDS)    # or sooner, on "Rescan"
         _sweep_wake.clear()
 
 

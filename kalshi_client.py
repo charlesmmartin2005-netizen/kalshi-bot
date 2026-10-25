@@ -47,22 +47,29 @@ class KalshiClient:
     _throttle_lock = threading.Lock()
     _next_slot = 0.0
 
-    # Background work (the dashboard's market sweeps) runs on a low-priority
-    # client capped at this rate, so the trading loop always has headroom —
-    # a full sweep used to starve it for 10-25s.
-    LOW_PRIORITY_RPS = 3.0
+    # Background work (the dashboard's markouts refresh; sweep.py in its own
+    # process) runs on a low-priority client: at most this rate and, within
+    # a process, only in slots the trading loop leaves free. A full sweep
+    # used to starve the loop for 10-25s, and later still queued ahead of it.
+    # While sweep.py runs, the dashboard lowers its own rate by this much so
+    # the two processes together stay at MAX_REQUESTS_PER_SECOND.
+    LOW_PRIORITY_RPS = 2.0
     low_priority = False
-    _low_lock = threading.Lock()
     _next_low_slot = 0.0
 
     def _wait_for_slot(self):
         if self.low_priority:
-            with KalshiClient._low_lock:
-                now = time.monotonic()
-                wait = KalshiClient._next_low_slot - now
-                KalshiClient._next_low_slot = max(now, KalshiClient._next_low_slot) + 1 / self.LOW_PRIORITY_RPS
-            if wait > 0:
-                time.sleep(wait)
+            # Take a slot only once it's free now, i.e. no trading request
+            # has reserved it, so a sweep delays trading by at most one slot.
+            while True:
+                with KalshiClient._throttle_lock:
+                    now = time.monotonic()
+                    free_at = max(KalshiClient._next_slot, KalshiClient._next_low_slot)
+                    if now >= free_at:
+                        KalshiClient._next_slot = now + 1 / self.MAX_REQUESTS_PER_SECOND
+                        KalshiClient._next_low_slot = now + 1 / self.LOW_PRIORITY_RPS
+                        return
+                time.sleep(max(free_at - now, 0.01))
         with KalshiClient._throttle_lock:
             now = time.monotonic()
             wait = KalshiClient._next_slot - now

@@ -102,7 +102,8 @@ until you reset it on the dashboard.
 | `risk_manager.py` | Allowed sides, loss breakers, kill switch |
 | `market_maker.py` | Order sync, takes, and paper fills from the trade tape |
 | `engine.py` | The main loop (shared by `main.py` and the dashboard) |
-| `catalog.py` | One cached sweep of every open event (~13k events, ~15s) |
+| `catalog.py` | One cached sweep of every open event (~14k events, ~30s) |
+| `sweep.py` | The dashboard's Scanner sweep (scanner + arbitrage), run in its own process every 5 minutes |
 | `scanner.py` / `arb.py` | Market ranking / arbitrage detection over the catalog |
 | `simulate.py` | Monte Carlo of the old vs new rules on resampled real history |
 | `backtest.py` | Minute-by-minute replay of the fair-value strategy on settled BTC daily markets, with markouts |
@@ -127,6 +128,7 @@ until you reset it on the dashboard.
 - **Kalshi data.** Kalshi's websocket needs an API key (it returns 401 without one).
   - **With a key,** books and the trade tape stream live.
   - **Without a key,** the bot polls REST at ~8 requests/s: one batched request for every market's best bid/ask every 0.4s, trade tapes every 2s, and depth every 10s.
+- **The Scanner's sweep runs in its own process** (2026-10-25). Inside the bot, freeing each old ~150k-market catalog froze every thread for 1–5s, so books went stale and quotes were pulled at the end of each sweep; the bot's process went from 644 MB to ~70 MB. While a sweep runs, the bot keeps to 8 of the 10 requests a second and the sweep to 2. Order-book depth (display only) no longer holds the engine's lock while it downloads, which had blocked repricing for ~0.6s every 10s.
 - **The last 2 hours stay off-limits** (`research/late_window.py`). Even with the index and the averaging window, the market mid beat the model in every bucket in both months, and taking against the book lost money in nearly every bucket.
 
 ## What testing showed (2026-10-19)
