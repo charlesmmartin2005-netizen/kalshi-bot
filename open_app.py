@@ -1,26 +1,37 @@
-"""Opens the dashboard as a desktop app: an Edge window of its own (no tabs or
-address bar) on http://127.0.0.1:8050. The Desktop and Start-menu shortcuts
-that install-app.ps1 makes run this with pythonw.exe, so no console shows.
+"""Opens the dashboard as a desktop app, Kalshi Bot Pro: an Edge window of its
+own (no tabs or address bar). The Desktop and Start-menu shortcuts that
+install-app.ps1 makes run this with pythonw.exe, so no console shows.
 
-If the bot isn't running, this starts the "Kalshi bot" task (run-bot.ps1, as
-at logon) and shows a small "Starting" window until the dashboard answers. If
-the app window is already open, it comes to the front instead of opening a
-second one. Closing the window leaves the bot running; stop-bot.ps1 stops it.
+On its own it opens this PC's bot at http://127.0.0.1:8050. If that bot isn't
+running, it starts the "Kalshi bot" task (run-bot.ps1, as at logon) and shows
+a small "Starting" window until the dashboard answers. Closing the window
+leaves the bot running; stop-bot.ps1 stops it.
+
+With --server (install-app.ps1 -Server) it opens the server's bot (README,
+"Run on a server") at http://127.0.0.1:8060, through an SSH tunnel it opens
+first if there isn't a working one, with a "Connecting" window meanwhile.
+
+Either way, if the app window is already open, it comes to the front instead
+of opening a second one.
 """
 import ctypes
 import os
 import socket
 import subprocess
+import sys
 import time
+import urllib.request
 import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-HOST, PORT = "127.0.0.1", 8050
+SERVER = "--server" in sys.argv
+HOST, PORT = "127.0.0.1", 8060 if SERVER else 8050
 URL = f"http://{HOST}:{PORT}/"
 TASK = "Kalshi bot"
-TITLE = "Kalshi bot"  # the page's <title>, which Edge gives the app window
-STARTUP_S = 120
+SSH_HOST = "kalshi-bot"  # the Host entry in ~\.ssh\config
+TITLE = "Kalshi Bot Pro"  # the page's <title>, which Edge gives the app window
+STARTUP_S = 30 if SERVER else 120
 NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
 user32 = ctypes.windll.user32
@@ -33,6 +44,15 @@ def up() -> bool:
     # dashboard opens its port only once it's ready to serve.
     try:
         with socket.create_connection((HOST, PORT), timeout=0.4):
+            pass
+    except OSError:
+        return False
+    if not SERVER:
+        return True
+    # A tunnel's port stays open while ssh notices its connection died (up to
+    # ~90s after the PC sleeps), so ask the server's bot itself.
+    try:
+        with urllib.request.urlopen(URL + "api/state", timeout=3):
             return True
     except OSError:
         return False
@@ -40,7 +60,7 @@ def up() -> bool:
 
 def app_window() -> int:
     # Edge's windows are all Chrome_WidgetWin_1; only the app window is
-    # titled exactly "Kalshi bot" (a browser tab adds " - Microsoft Edge").
+    # titled exactly "Kalshi Bot Pro" (a browser tab adds " - Microsoft Edge").
     return user32.FindWindowW("Chrome_WidgetWin_1", TITLE)
 
 
@@ -61,26 +81,47 @@ def start_bot() -> None:
             cwd=ROOT, creationflags=NO_WINDOW)
 
 
+def start_tunnel() -> None:
+    # Ends a tunnel that still listens but no longer reaches the server, then
+    # opens a new one: ssh with no window, which outlives this launcher.
+    subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process -Filter \"Name = 'ssh.exe'\" | "
+         f"Where-Object {{ $_.CommandLine -match '{PORT}:127\\.0\\.0\\.1:8050' }} | "
+         "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+        capture_output=True, creationflags=NO_WINDOW)
+    ssh = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
+    subprocess.Popen(
+        [str(ssh) if ssh.exists() else "ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+         "-L", f"{PORT}:127.0.0.1:8050", SSH_HOST],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+
+
 def wait_for_bot() -> bool:
-    """Shows "Starting the bot…" until the dashboard answers. False if the
-    person closes the window or it doesn't come up in STARTUP_S."""
+    """Shows "Starting the bot…" (with --server, "Connecting to the server…")
+    until the dashboard answers. False if the person closes the window or it
+    doesn't come up in STARTUP_S."""
     import tkinter as tk
+
+    doing = "Connecting to the server" if SERVER else "Starting the bot"
+    failed = ("Couldn't reach the server.\nCheck the internet connection, or run: ssh kalshi-bot" if SERVER
+              else "The bot didn't start.\nSee logs\\crash.log and logs\\launcher.log.")
 
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
-    root.title("Kalshi bot: starting")
+    root.title(f"{TITLE}: {doing.lower()}")
     try:
         root.iconbitmap(str(ROOT / "static" / "icon.ico"))
     except tk.TclError:
         pass
     root.configure(bg="#0B1826", padx=28, pady=22)
     root.resizable(False, False)
-    tk.Label(root, text="Kalshi bot", font=("Segoe UI Semibold", 16), fg="#EAF0F6", bg="#0B1826").pack(anchor="w")
-    status = tk.Label(root, text="Starting the bot", font=("Segoe UI", 11), fg="#9DB0C3", bg="#0B1826",
-                      width=34, anchor="w", justify="left")
+    tk.Label(root, text=TITLE, font=("Segoe UI Semibold", 16), fg="#EAF0F6", bg="#0B1826").pack(anchor="w")
+    status = tk.Label(root, text=doing, font=("Segoe UI", 11), fg="#9DB0C3", bg="#0B1826",
+                      width=46 if SERVER else 34, anchor="w", justify="left")
     status.pack(anchor="w", pady=(6, 0))
     root.update_idletasks()
     w, h = root.winfo_width(), root.winfo_height()
@@ -96,11 +137,10 @@ def wait_for_bot() -> bool:
             root.destroy()
             return
         if time.monotonic() > deadline:
-            status.config(text="The bot didn't start.\nSee logs\\crash.log and logs\\launcher.log.",
-                          fg="#FF8F7A")
+            status.config(text=failed, fg="#FF8F7A")
             return
         dots[0] = dots[0] % 3 + 1
-        status.config(text="Starting the bot" + "." * dots[0])
+        status.config(text=doing + "." * dots[0])
         root.after(500, check)
 
     root.after(300, check)
@@ -127,11 +167,11 @@ def edge() -> str | None:
 def main() -> None:
     # One launcher at a time: a second click while the bot is starting would
     # otherwise open a second window when it's up.
-    kernel32.CreateMutexW(None, False, "Local\\KalshiBotApp")
+    kernel32.CreateMutexW(None, False, "Local\\KalshiBotProServer" if SERVER else "Local\\KalshiBotApp")
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         return
     if not up():
-        start_bot()
+        start_tunnel() if SERVER else start_bot()
         if not wait_for_bot():
             return
     if hwnd := app_window():

@@ -106,9 +106,18 @@ against 26–60 and 37–75 ms from the PC (TCP connect). Its firewall lets in
 SSH only; `~\.ssh\config` has the `kalshi-bot` host entry and its key,
 `~\.ssh\kalshi-lightsail`.
 
+**As a desktop app, Kalshi Bot Pro:** run `install-app.ps1 -Server` once.
+Then open **Kalshi Bot Pro** from the Desktop or the Start menu: the server
+bot's dashboard opens in a window of its own. If there's no working SSH tunnel
+(the first time, or after the PC slept), it opens one first, with a small
+"Connecting to the server" window for a few seconds. Closing the window
+doesn't stop the server's bot. `install-app.ps1 -Server -Uninstall` removes
+the shortcuts.
+
 ```
+powershell -ExecutionPolicy Bypass -File install-app.ps1 -Server   # the Kalshi Bot Pro shortcuts
 powershell -ExecutionPolicy Bypass -File deploy-server.ps1      # send the code as it is now, restart the server's bot
-powershell -ExecutionPolicy Bypass -File server-dashboard.ps1   # its dashboard → http://127.0.0.1:8060
+powershell -ExecutionPolicy Bypass -File server-dashboard.ps1   # its dashboard in your browser → http://127.0.0.1:8060
 ssh kalshi-bot "sudo systemctl stop kalshi-bot"                 # stop it until the next boot (start, restart, status the same way)
 ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 ```
@@ -145,9 +154,9 @@ ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 | `dashboard.py` + `static/index.html` | Local web dashboard: Overview (today, settlement payout), Ladder, Edge (markouts vs history), Activity (ledger, settings, log), Scanner |
 | `markouts.py` | Scores fills by how the market moved 1, 5 and 60 minutes later (Edge view, `research/paper_markouts.py`) |
 | `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
-| `open_app.py` / `install-app.ps1` | Desktop app: opens the dashboard in its own window, starting the bot if it's down / installs its shortcuts and the always-on task |
+| `open_app.py` / `install-app.ps1` | Desktop app, Kalshi Bot Pro: opens the dashboard in its own window, starting the bot if it's down (`--server`: the server's bot, through an SSH tunnel) / installs its shortcuts and the always-on task (`-Server`: the Kalshi Bot Pro shortcuts only) |
 | `deploy-server.ps1` / `setup-server.sh` / `kalshi-bot.service` | Server: sends the code and restarts the bot / installs Python 3.15, packages and the service / the always-on service |
-| `server-dashboard.ps1` | Opens the server bot's dashboard through an SSH tunnel |
+| `server-dashboard.ps1` | Opens the server bot's dashboard in the default browser, through an SSH tunnel |
 | `static/icon*`, `static/manifest.json` | App icon and web manifest |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
