@@ -96,6 +96,33 @@ back when you log in. The kill switch still holds: a halt (button or loss
 limit) is saved to `halted.txt`, so the bot stays halted across restarts
 until you reset it on the dashboard.
 
+## Run on a server
+
+Since 2026-10-27 the bot also runs on an AWS Lightsail server, `kalshi-bot`
+(Virginia, Ubuntu 24.04, 1 GB, $7/month). It runs whether or not the PC is
+on, starts at boot, and restarts 10 seconds after any exit
+(`kalshi-bot.service`). It reaches Kalshi in about 2 ms and Coinbase in 3 ms,
+against 26–60 and 37–75 ms from the PC (TCP connect). Its firewall lets in
+SSH only; `~\.ssh\config` has the `kalshi-bot` host entry and its key,
+`~\.ssh\kalshi-lightsail`.
+
+```
+powershell -ExecutionPolicy Bypass -File deploy-server.ps1      # send the code as it is now, restart the server's bot
+powershell -ExecutionPolicy Bypass -File server-dashboard.ps1   # its dashboard → http://127.0.0.1:8060
+ssh kalshi-bot "sudo systemctl stop kalshi-bot"                 # stop it until the next boot (start, restart, status the same way)
+ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
+```
+
+- **It has its own state.** The server keeps its own `fills_log.jsonl`
+  (copied from the PC once, with `deploy-server.ps1 -Fills`), `halted.txt`
+  and logs. Deploys don't touch them.
+- **Run one live bot.** Both bots are in paper mode, so running both is
+  harmless. Live, each would place its own orders: stop the PC's
+  (`install-app.ps1 -Uninstall`) before the server's goes live.
+- **The server's IP changes** if the instance is stopped and started from
+  the Lightsail console (not on a reboot). Then update `HostName` in
+  `~\.ssh\config`, or attach a static IP in Lightsail (free while attached).
+
 ## Files
 
 | File | Role |
@@ -119,6 +146,8 @@ until you reset it on the dashboard.
 | `markouts.py` | Scores fills by how the market moved 1, 5 and 60 minutes later (Edge view, `research/paper_markouts.py`) |
 | `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
 | `open_app.py` / `install-app.ps1` | Desktop app: opens the dashboard in its own window, starting the bot if it's down / installs its shortcuts and the always-on task |
+| `deploy-server.ps1` / `setup-server.sh` / `kalshi-bot.service` | Server: sends the code and restarts the bot / installs Python 3.15, packages and the service / the always-on service |
+| `server-dashboard.ps1` | Opens the server bot's dashboard through an SSH tunnel |
 | `static/icon*`, `static/manifest.json` | App icon and web manifest |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |

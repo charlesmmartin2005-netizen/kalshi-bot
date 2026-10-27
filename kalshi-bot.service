@@ -1,0 +1,22 @@
+# The bot on the Lightsail server (README, "Run on a server"): the Linux
+# counterpart of run-bot.ps1 and the "Kalshi bot" scheduled task. It starts at
+# boot, with no logon needed, and starts again 10 seconds after any exit.
+# setup-server.sh installs it as /etc/systemd/system/kalshi-bot.service.
+[Unit]
+Description=Kalshi bot (dashboard with trading on)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi-bot
+ExecStart=/home/ubuntu/kalshi-bot/.venv/bin/python dashboard.py --autostart --no-browser
+# As on the PC: the bot logs to logs/bot.log, and whatever Python prints to
+# stderr (a crash traceback) goes to logs/crash.log.
+StandardOutput=null
+StandardError=append:/home/ubuntu/kalshi-bot/logs/crash.log
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
