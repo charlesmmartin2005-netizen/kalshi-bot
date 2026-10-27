@@ -8,7 +8,9 @@ risk state, and a rolling log. It adds no trading logic of its own — every
 quote/cancel decision is still MarketMaker's, every limit is RiskManager's.
 """
 import collections
+import ctypes
 import logging
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -53,6 +55,23 @@ STREAM_CHECK_SECONDS = 0.5   # with the websocket: how often to drain its trade 
 # A market whose Kalshi book is older than this is not quoted or traded
 # (quotes are pulled) — e.g. while REST polling is failing or after sleep.
 MAX_BOOK_AGE_SECONDS = 3.0
+# Windows put the PC to sleep while the bot traded (twice on 2026-10-25/26).
+# Trading paused, and on wake the paper quotes left from before the sleep
+# were filled against trades made while it slept. Live orders would really
+# sit on Kalshi at stale prices. So the engine thread asks Windows to keep
+# the PC awake while trading runs. The screen can still turn off. Closing
+# the lid or picking Sleep still sleeps the PC.
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def _keep_awake(on: bool):
+    """Hold (or release) a keep-awake request for the calling thread."""
+    if sys.platform != "win32":
+        return
+    flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
+    if not ctypes.windll.kernel32.SetThreadExecutionState(flags):
+        log.warning("Couldn't ask Windows to %s", "keep the PC awake" if on else "allow sleep again")
 
 
 class _RingLogHandler(logging.Handler):
@@ -306,20 +325,26 @@ class Engine:
     # fast as the exchanges stream it.
 
     def _loop(self):
-        while not self._stop.is_set():
-            if self.risk.halted:
-                log.critical("Bot is halted (%s). Cancelling all resting orders.",
-                             self.risk.halt_reason)
-                with self.lock:
-                    self.maker.cancel_all("kill switch")
-                    self.running = False
-                    if not HALT_FILE.exists():
-                        self._save_halt()
-                return
-            self._wake.wait(REPRICE_HEARTBEAT_SECONDS)
-            self._wake.clear()
-            self.run_cycle()
-            self._stop.wait(REPRICE_MIN_INTERVAL_SECONDS)
+        # The request belongs to this thread, so it lasts exactly as long as
+        # trading does: stop, kill switch and halts all end here.
+        _keep_awake(True)
+        try:
+            while not self._stop.is_set():
+                if self.risk.halted:
+                    log.critical("Bot is halted (%s). Cancelling all resting orders.",
+                                 self.risk.halt_reason)
+                    with self.lock:
+                        self.maker.cancel_all("kill switch")
+                        self.running = False
+                        if not HALT_FILE.exists():
+                            self._save_halt()
+                    return
+                self._wake.wait(REPRICE_HEARTBEAT_SECONDS)
+                self._wake.clear()
+                self.run_cycle()
+                self._stop.wait(REPRICE_MIN_INTERVAL_SECONDS)
+        finally:
+            _keep_awake(False)
 
     def _data_loop(self):
         last_trades = last_depth = 0.0

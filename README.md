@@ -85,8 +85,13 @@ powershell -ExecutionPolicy Bypass -File install-app.ps1 -Uninstall   # stop it 
 Logs: `logs\bot.log` (everything the dashboard shows, 5 MB × 4 files),
 `logs\launcher.log` (each start and exit), `logs\crash.log` (Python errors).
 
-The bot stops while the PC sleeps: set Settings → System → Power & battery →
-"Make my device sleep after" (plugged in) to Never. After a reboot it comes
+While trading runs, the bot keeps the PC from going to sleep on its own.
+The screen still turns off, and Windows lists the bot's request under
+`powercfg /requests` (admin). The PC still sleeps if you close the lid or
+choose Sleep. The bot is paused while asleep, and in live mode any orders
+left resting stay on Kalshi at their old prices. To trade with the lid
+closed, set "Lid close action" to "Do nothing" (Control Panel → Power
+Options → Choose what closing the lid does). After a reboot the bot comes
 back when you log in. The kill switch still holds: a halt (button or loss
 limit) is saved to `halted.txt`, so the bot stays halted across restarts
 until you reset it on the dashboard.
