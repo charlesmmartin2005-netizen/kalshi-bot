@@ -284,15 +284,20 @@ class Engine:
 
     def _maybe_rotate(self):
         """Every ROTATE_SECONDS, or as soon as a watched market is within 2h
-        of close (where the model stops trading), re-run autopick."""
+        of close (where the model stops trading), re-run autopick. Markets
+        it kept only to work a position down don't count: they stay that
+        close until flat, and re-picking for them on every loop (twice a
+        second) flooded the log and the API on 2026-10-27."""
         if not self.auto_rotate:
             return
+        kept = set((self.last_autopick or {}).get("kept", []))
+        picked = [t for t in list(self.cfg.watched_tickers) if t not in kept]
         closing = any(
             (info := self.market_info.get(t, {})).get("close_time")
             and (datetime.fromisoformat(info["close_time"].replace("Z", "+00:00"))
                  - datetime.now(timezone.utc)).total_seconds() < 2 * 3600
-            for t in list(self.cfg.watched_tickers))
-        idle = not self.cfg.watched_tickers          # e.g. waiting for the next daily to open
+            for t in picked)
+        idle = not picked          # e.g. waiting for the next daily to open
         if closing or time.time() - self._last_rotate > (60 if idle else ROTATE_SECONDS):
             self._last_rotate = time.time()
             try:

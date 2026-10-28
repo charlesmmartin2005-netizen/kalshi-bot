@@ -324,7 +324,10 @@ class KalshiStream(_WsThread):
             with self.lock:
                 levels = self.books.setdefault(t, {"yes": {}, "no": {}})[side]
                 levels[px] = levels.get(px, 0) + delta
-                if levels[px] <= 0:
+                # Sizes are fractional ("0.01") and don't sum exactly as
+                # floats: an emptied level could stay at 1e-13 as a ghost
+                # best price (a 64¢ bid over a 59¢ ask on 2026-10-27).
+                if levels[px] < 1e-6:
                     del levels[px]
                 self.versions[t] = self.versions.get(t, 0) + 1
             self.changed.set()
