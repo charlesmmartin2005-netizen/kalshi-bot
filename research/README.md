@@ -8,11 +8,99 @@ own fair_value / plan_quotes / RiskManager code.
     python research/strategy_lab.py --cache cache_holdout fetch --days 31 --skip-days 31   # Aug 19 – Sep 18
     python research/strategy_lab.py run [--only A P Q]
     python research/strategy_lab.py --cache cache_holdout run --only A P Q
+    python research/strategy_lab.py [--cache cache_holdout] holds   # takes: hold vs exit after N min
 
     python research/paper_markouts.py --since 2026-10-22    # score the live paper bot's fills
+    scp kalshi-bot:kalshi-bot/fills_log.jsonl fills_log.server.jsonl   # the bot's ledger is on the server
+    python research/paper_markouts.py --since 2026-10-22 --ledger fills_log.server.jsonl
 
 Kalshi's API returns these markets without strike data before ~Aug 17, so two
 months is all the history there is.
+
+## 2026-10-28: close takes after a fixed hold? No, keep holding them
+
+In the 24 hours to 10-28 14:22 CT, paper takes marked well at mid (+2.4¢ a
+contract after 1 minute, +5.7¢ after 60) but lost money held, mostly on two
+short bursts held for hours while BTC rose $300–600 (10-28's takes settled at
+−$99). `holds` replays the live settings with what's left of each take closed
+N minutes later at the touch, paying the spread and the taker fee. If the
+model would make the same take again at that moment, the take's clock
+restarts instead (unwinding would only pay the round trip to get back in;
+without that rule 5-minute exits lose another $60–90 a month). The lab now
+also applies the live $50 take cap, and walks strikes in sorted order: set
+order varied with the hash seed and moved totals by ~$5 between runs.
+
+Per month after fees, live settings (BTC only, 6¢ quotes, 0¢ unwind floor,
+$50 cap), pess / mid / opt fills as in "What holds up across fill models"
+(the 1-second pess and opt runs need the scratch harness and Binance archive,
+which aren't in the repo; `holds`' strict fills match mid on Aug–Sep and
+differ by up to $19 on Sep–Oct):
+
+| Takes | P&L Sep–Oct | P&L Aug–Sep | sd/day Sep–Oct | sd/day Aug–Sep | Worst day Sep–Oct | Worst day Aug–Sep |
+|---|---|---|---|---|---|---|
+| **Held to settlement (live)** | +$115 / +$160 / +$270 | +$28 / +$115 / +$161 | $32 / $27 / $39 | $28 / $33 / $28 | −$56 / −$33 / −$40 | −$61 / −$81 / −$45 |
+| Exit after 5 min | −$71 / −$47 / +$118 | −$76 / +$42 / +$46 | $21 / $11 / $33 | $18 / $11 / $15 | −$43 / −$28 / −$27 | −$39 / −$18 / −$31 |
+| Exit after 15 min | −$47 / −$31 / +$139 | −$50 / +$66 / +$66 | $20 / $12 / $32 | $19 / $14 / $17 | −$44 / −$35 / −$24 | −$39 / −$16 / −$32 |
+| Exit after 60 min | +$66 / +$124 / +$267 | −$11 / +$104 / +$113 | $20 / $13 / $31 | $21 / $18 / $20 | −$42 / −$11 / −$17 | −$41 / −$38 / −$33 |
+| Exit after 120 min | +$52 / +$105 / +$232 | +$7 / +$116 / +$134 | $21 / $15 / $31 | $23 / $21 / $23 | −$45 / −$19 / −$18 | −$44 / −$42 / −$37 |
+
+Day by day against holding, across these and `holds`' normal and strict
+fills (10 runs per exit): 5- and 15-minute exits lose in every run, $9–$235
+a month. 60- and 120-minute exits lose $4–$84 in 16 of 20 runs and gain up
+to $48 in 4 (Aug–Sep: both under normal fills, and +$1 at 120 minutes under
+strict and mid), with a standard error of $65–$125 a month on the
+difference, so neither direction is significant. Exits beat holding on only
+7–16 of 31 days. What they buy is smaller swings: 20–50% less sd/day at 60
+minutes, and a smaller worst day in every run.
+
+Each take on its own (strict fills, not netted against other fills), ¢ per
+contract after fees, with sd/day and worst day of the takes alone:
+
+| | Sep–Oct | Aug–Sep |
+|---|---|---|
+| Held to settlement | +2.27¢ ($29, −$57) | −8.85¢ ($43, −$168) |
+| Closed at the touch after 5 min | −2.24¢ ($5, −$20) | −3.64¢ ($6, −$23) |
+| after 15 min | −1.83¢ ($4, −$14) | −2.98¢ ($6, −$24) |
+| after 60 min | +0.87¢ ($8, −$10) | −2.21¢ ($13, −$58) |
+| after 120 min | +0.90¢ ($11, −$16) | −2.55¢ ($16, −$76) |
+
+By mid, takes have earned +1.1 / +1.5 / +4.2 / +4.0¢ after 5 / 15 / 60 / 120
+minutes in Sep–Oct (+0.7 / +1.5 / +1.5 / +0.9¢ in Aug–Sep), before fees.
+The entry fee, the exit fee and half the spread come to ~3.3¢ a contract, more
+than a take has made after 5–15 minutes. On their own, Aug–Sep's takes would
+have lost ~$200 less exited at 60 minutes, but the strategy doesn't get that,
+because it never really holds its takes to settlement: resting quotes leaned
+against the position work them off for free. In Aug–Sep, 3,141 contracts
+were taken and only 1,418 net contracts reached settlement. A 60-minute exit
+replaces those maker exits with taker exits (resting fills fall from 3,813
+to 2,609), and the room it frees under the cap lets more takes in.
+
+Live paper takes 10-22 → 10-28 (server ledger, `--ledger`; 164 takes, 1,873
+contracts, 4 settlement days), each marked at the touch N minutes later with
+fees both ways:
+
+| Takes | ¢/contract | Total | sd/day | Worst day | 10-22 | 10-26 | 10-27 | 10-28 |
+|---|---|---|---|---|---|---|---|---|
+| **Held to settlement** | +1.09¢ | +$20 | $72 | −$99 | +$53 | +$89 | −$22 | −$99 |
+| Exit after 1 min | +0.46¢ | +$9 | $10 | −$8 | +$14 | −$7 | +$10 | −$8 |
+| Exit after 5 min | −0.89¢ | −$17 | $9 | −$20 | +$4 | +$0 | −$1 | −$20 |
+| Exit after 15 min | −2.14¢ | −$40 | $8 | −$22 | −$22 | −$10 | −$6 | −$2 |
+| Exit after 60 min | −1.46¢ | −$27 | $20 | −$24 | −$19 | −$11 | −$24 | +$27 |
+| Exit after 120 min | −3.92¢ | −$73 | $13 | −$33 | −$33 | −$3 | −$29 | −$9 |
+
+The same picture: holding made the most, and exits only shrink the swings. A
+60-minute exit would have turned 10-28's −$99 into +$27 but lost on the other
+three days. The 1-minute exit is the one live rule that ends up positive
+($9 in four days); the lab's 1-minute books can't test it. (Tickers
+`KXBTCD-26OCT2817-…` and `KXBTCD-26OCT2817B-…` are both the 10-28 event.)
+
+**Recommendation: hold, i.e. keep the current behaviour.** 5- and 15-minute
+exits lost to holding in all 20 backtest runs and in the live paper takes;
+60- and 120-minute exits lost in 16 of 20 runs and live, and won only within
+noise. A 60-minute exit is the only candidate, and only if smaller daily
+swings are worth paying for: it cut sd/day by 20–50% and the worst day, and
+cost up to $84 a month ($11–$36 under mid fills), a difference two months
+can't tell apart from zero.
 
 ## 2026-10-22: the earlier results looked ahead
 

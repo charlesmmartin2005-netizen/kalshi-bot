@@ -10,6 +10,7 @@ changes parameters and which strikes are watched / how quotes are leaned.
 
     python research/strategy_lab.py fetch --days 30     # download + cache data (slow, once)
     python research/strategy_lab.py run                 # replay all variants on the cache
+    python research/strategy_lab.py holds               # live takes: hold to settlement vs exit after N min
 
 Fill model (same as backtest.py): takes fill at the minute's touch; resting
 quotes fill from real trades that went through our price, or traded at our
@@ -36,6 +37,7 @@ import requests  # noqa: E402
 
 from config import CONFIG, RiskConfig  # noqa: E402
 from fair_value import FairValue, _crypto_prob  # noqa: E402
+from fees import order_fee_cents, per_contract_fee_cents  # noqa: E402
 from kalshi_client import build_client, dollars_to_cents  # noqa: E402
 from risk_manager import RiskManager  # noqa: E402
 from strategy import plan_quotes  # noqa: E402
@@ -265,16 +267,47 @@ class Variant:
     lean_takes: bool = True        # False = the delta lean moves resting quotes only, never triggers takes
     strict_fills: bool = False     # maker fills must survive the next reprice (see run_day)
     spot_delay_min: int = 0        # model sees the coin price this many minutes late (speed test)
+    exit_after_min: int | None = None   # close each take this many minutes later at the touch (None = hold)
+    exit_renew: bool = True        # ...unless the model would take that side again now (restarts its clock)
 
 
 def _clip(x, lo=-1.0, hi=1.0):
     return max(lo, min(hi, x))
 
 
+EXIT_MINUTES = (5, 15, 60, 120)
+
+
+def take_exits(fills):
+    """Each take on its own, in cents after fees: held to settlement
+    ("settle"), and closed at the touch N minutes later for each N in
+    EXIT_MINUTES (taker fee both ways). Also the mid N minutes later before
+    fees ("mid N"), the markout the paper report shows. A take with no touch
+    left before the close settles."""
+    out = []
+    for i, ev, t, action, price, size, kind in fills:
+        if kind != "take":
+            continue
+        sgn = 1 if action == "buy" else -1
+        fee = order_fee_cents(price, size, maker=False)
+        held = sgn * ((100 if ev["mkt"][t]["result"] == "yes" else 0) - price) * size - fee
+        row = {"size": size, "settle": held}
+        later = ev["books"][t][i:]
+        for h in EXIT_MINUTES:
+            px = next((b if sgn > 0 else a for b, a in later[h:] if (b if sgn > 0 else a) is not None), None)
+            row[h] = held if px is None else sgn * (px - price) * size - fee - order_fee_cents(px, size, maker=False)
+            b, a = later[h] if h < len(later) else (None, None)
+            row[f"mid {h}"] = sgn * ((a + b) / 2 - price) * size if b is not None and a is not None else None
+        out.append(row)
+    return out
+
+
 def run_day(v: Variant, evs):
     risk = RiskManager(v.cfg)
     resting, fills = {}, []
     watched = {}
+    unwinds, renewed = [], 0       # [due minute, ticker, action that closes it, contracts] per take
+    cap = v.cfg.max_take_book_delta_usd
     n = min(len(e["spots"]) for e in evs)
     peak_exposure, fill_hours, model_hours = 0.0, set(), set()
     for i in range(n):
@@ -297,15 +330,18 @@ def run_day(v: Variant, evs):
 
             probs = {t: _crypto_prob(ev["mkt"][t], spot, sd) for t in managed}
             lean = {}
-            if v.hedge_cents:
+            if v.hedge_cents or cap is not None:
                 delta = {t: _crypto_prob(ev["mkt"][t], spot * 1.005, sd) - _crypto_prob(ev["mkt"][t], spot * 0.995, sd)
                          for t in managed}
+            if v.hedge_cents:
                 port = sum(risk.net(t) * delta[t] for t in managed)        # $ per 1% move
                 dmax = max(delta.values()) or 1
                 for t in managed:
                     lean[t] = -v.hedge_cents * _clip(port / v.hedge_ref_usd) * delta[t] / dmax
 
-            for t in managed:
+            # sorted: a set's order changes with each process's hash seed, and
+            # the order decides which takes the cap and exposure limits let through
+            for t in sorted(managed):
                 bid, ask = ev["books"][t][i]
                 if bid is not None and ask is not None:
                     marks[t] = (bid + ask) / 2
@@ -319,6 +355,31 @@ def run_day(v: Variant, evs):
                         risk.record_fill(t, "yes", "buy", -net, ask, maker=False)
                         fills.append((i, ev, t, "buy", ask, -net, "flatten"))
                     continue
+                # exit_after_min: what's left of each take is closed N minutes
+                # later at the touch, paying the taker fee. If the model would
+                # take that side again right now, unwinding would only pay the
+                # round trip to re-enter, so the take's clock restarts instead.
+                for u in [u for u in unwinds if u[1] == t and u[0] <= i]:
+                    _, _, action, size = u
+                    size = min(size, -net if action == "buy" else net)
+                    px = ask if action == "buy" else bid
+                    if size <= 0:                # resting quotes already worked it down
+                        unwinds.remove(u)
+                        continue
+                    if px is None:               # no touch this minute: try the next
+                        continue
+                    f = probs[t] * 100 + (lean.get(t, 0) if v.lean_takes else 0)
+                    again = bid if action == "buy" else ask      # price the original take would get now
+                    if v.exit_renew and tradeable and again is not None and \
+                            (again - f if action == "buy" else f - again) \
+                            - per_contract_fee_cents(again, maker=False) >= v.cfg.take_edge_cents:
+                        u[0] = i + v.exit_after_min
+                        renewed += 1
+                        continue
+                    risk.record_fill(t, "yes", action, size, px, maker=False)
+                    fills.append((i, ev, t, action, px, size, "unwind"))
+                    unwinds.remove(u)
+                    net = risk.net(t)
                 fv =FairValue(min(99, max(1, probs[t] * 100 + lean.get(t, 0))), "crypto", "", tradeable)
                 sides, _ = risk.allowed_sides(t)
                 if t not in watched[s]:          # rolled off: only work the position down
@@ -330,10 +391,24 @@ def run_day(v: Variant, evs):
                     # takes judged on the raw model; the lean only moves resting quotes
                     raw = FairValue(min(99, max(1, probs[t] * 100)), "crypto", "", tradeable)
                     plan.takes = plan_quotes(book, risk.net(t), v.cfg, sides, raw).takes
+                if cap is not None and plan.takes:
+                    # MarketMaker._cap_take_delta: no take past cap $ per 1% of
+                    # the book's coin exposure; takes that reduce it always go
+                    port, kept = sum(risk.net(x) * delta[x] for x in managed), []
+                    for action, price, size in plan.takes:
+                        step = delta[t] if action == "buy" else -delta[t]
+                        while size > 0 and abs(port + step * size) > max(cap, abs(port)):
+                            size -= 1
+                        if size > 0:
+                            kept.append((action, price, size))
+                            port += step * size
+                    plan.takes = kept
                 for action, price, size in plan.takes:
                     risk.record_fill(t, "yes", action, size, price, maker=False)
                     fills.append((i, ev, t, action, price, size, "take"))
                     fill_hours.add(i // 60)
+                    if v.exit_after_min:
+                        unwinds.append([i + v.exit_after_min, t, "sell" if action == "buy" else "buy", size])
                 r = resting.setdefault(t, {})
                 prev = dict(r)
                 for action in ("buy", "sell"):
@@ -395,6 +470,8 @@ def run_day(v: Variant, evs):
                 markouts.append((kind, size * ((mid - price) if action == "buy" else (price - mid))))
     return {"pnl": sum(by_series.values()), "by_series": by_series, "halted": risk.halted,
             "takes": sum(1 for f in fills if f[6] == "take"),
+            "unwinds": sum(1 for f in fills if f[6] == "unwind"), "renewed": renewed,
+            "take_exits": take_exits(fills),
             "makers": sum(1 for f in fills if f[6] == "maker"),
             "contracts": sum(f[5] for f in fills),
             "fees": sum(p.total_fees_cents for p in risk.positions.values()) / 100,
@@ -513,6 +590,41 @@ def cmd_run(only):
     print(f"\nsaved {out}")
 
 
+def cmd_holds():
+    """Live settings (Q): takes held to settlement vs each take closed at the
+    touch after N minutes, under both 1-minute fill models. Prints only."""
+    days = load_days()
+    live = next(v for v in VARIANTS if v.name.startswith("Q"))
+    print(f"{len(days)} days ({days[0][0]['event']} .. {days[-1][0]['event']}), {live.name}\n")
+    for strict in (False, True):
+        print("strict fills" if strict else "normal fills")
+        hold = None
+        for n in (None,) + EXIT_MINUTES:
+            v = replace(live, strict_fills=strict, exit_after_min=n)
+            rows = [run_day(v, d) for d in days]
+            pnl = [r["pnl"] for r in rows]
+            hold = hold or rows
+            print(f"  {'hold to settlement' if n is None else f'exit after {n:>3}m':<19} total ${sum(pnl):>+8.2f}  "
+                  f"sd/day ${statistics.pstdev(pnl):5.2f}  worst ${min(pnl):>+7.2f}  "
+                  f"takes/day {statistics.mean(r['takes'] for r in rows):4.1f}  "
+                  f"unwinds/day {statistics.mean(r['unwinds'] for r in rows):4.1f}  "
+                  f"renewed/day {statistics.mean(r['renewed'] for r in rows):4.1f}  "
+                  f"fees ${sum(r['fees'] for r in rows):6.2f}", flush=True)
+        # the same takes scored one by one (positions not netted, no
+        # interaction with resting quotes): what each exit rule alone is worth
+        c = sum(x["size"] for r in hold for x in r["take_exits"]) or 1
+        print(f"  each take on its own ({c} contracts), after fees:")
+        for key in ("settle",) + EXIT_MINUTES:
+            day = [sum(x[key] for x in r["take_exits"]) / 100 for r in hold]
+            mids = [(x[f"mid {key}"], x["size"]) for r in hold for x in r["take_exits"]
+                    if key != "settle" and x[f"mid {key}"] is not None]
+            mid = (f"  (mid markout {sum(m for m, _ in mids) / sum(k for _, k in mids):+5.2f}¢ before fees)"
+                   if mids else "")
+            print(f"    {'settle' if key == 'settle' else f'{key:>3}m at touch':<13} {sum(day) * 100 / c:+6.2f}¢/contract  "
+                  f"total ${sum(day):>+8.2f}  sd/day ${statistics.pstdev(day):5.2f}  worst ${min(day):>+7.2f}{mid}")
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -521,6 +633,7 @@ def main():
     f.add_argument("--skip-days", type=int, default=0, help="end the window this many days ago")
     r = sub.add_parser("run")
     r.add_argument("--only", nargs="*")
+    sub.add_parser("holds", help="hold takes to settlement vs close them after N minutes")
     ap.add_argument("--cache", help="cache folder name under research/ (default: cache)")
     args = ap.parse_args()
     if args.cache:
@@ -528,6 +641,8 @@ def main():
         CACHE = Path(__file__).parent / args.cache
     if args.cmd == "fetch":
         cmd_fetch(args.days, args.skip_days)
+    elif args.cmd == "holds":
+        cmd_holds()
     else:
         cmd_run(args.only)
 
