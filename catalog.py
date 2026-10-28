@@ -13,6 +13,20 @@ CATALOG_TTL = 300
 _lock = threading.Lock()
 _cache = {"ts": 0.0, "events": None}
 
+# Only the fields scanner.py, arb.py and fair_value.py read. With all 48 per
+# market the catalog held ~760 MB, and on the 1 GB server the sweep got the
+# bot OOM-killed four times on 2026-10-28; this keeps it near 190 MB.
+EVENT_FIELDS = ("event_ticker", "title", "category", "mutually_exclusive")
+MARKET_FIELDS = ("ticker", "event_ticker", "status", "title", "yes_sub_title", "yes_bid_dollars",
+                 "yes_ask_dollars", "volume_24h_fp", "open_interest_fp", "close_time",
+                 "strike_type", "floor_strike", "cap_strike")
+
+
+def _slim(event: dict) -> dict:
+    out = {k: event[k] for k in EVENT_FIELDS if k in event}
+    out["markets"] = [{k: m[k] for k in MARKET_FIELDS if k in m} for m in event.get("markets") or []]
+    return out
+
 
 def load_events(client, force: bool = False) -> list[dict]:
     with _lock:
@@ -21,7 +35,7 @@ def load_events(client, force: bool = False) -> list[dict]:
         t0, events, cursor = time.time(), [], None
         while True:
             resp = client.get_events(cursor=cursor)
-            events += resp.get("events", [])
+            events += [_slim(e) for e in resp.get("events", [])]
             cursor = resp.get("cursor")
             if not cursor:
                 break
