@@ -177,6 +177,21 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
     }
 
 
+def pnl_since(fills, since, equity_usd, settled_by) -> float:
+    """Equity now minus the account at `since`: the fills before it, plus
+    the settlement of every market that had closed by then. (The equity
+    curve can't give this: it books settlements at its end.)
+    settled_by(ticker, since) -> (price_cents, result) or None."""
+    start = compute(fills=[f for f in fills if f["ts"] < since])
+    for ml in start["markets"]:
+        if ml.net_contracts:
+            settled = settled_by(ml.ticker, since)
+            if settled:
+                ml.settle(*settled)
+    base = sum(ml.realized_pnl_cents - ml.total_fees_cents for ml in start["markets"]) / 100
+    return round(equity_usd - (STARTING_BALANCE_USD + base), 2)
+
+
 def settlement_bands(positions) -> list:
     """What an event's open book pays at settlement, band by band.
 

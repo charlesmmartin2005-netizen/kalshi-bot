@@ -139,20 +139,29 @@ def _event_close(event_ticker):
         return None
 
 
+def _settled_by(ticker, since):
+    """(price, result) if the market had closed by `since` and has settled."""
+    close = _event_close(ticker.rsplit("-", 1)[0])
+    if close and datetime.fromisoformat(close).timestamp() <= since:
+        final, price, result = pnl.check_settlement(engine.client, ticker)
+        if final:
+            return price, result
+    return None
+
+
 def _today_usd(fills, equity_usd):
-    """Equity now minus the account at midnight ET: fills before midnight,
-    plus the settlement of every market that closed before it. (The equity
-    curve can't give this: it books settlements at its end.)"""
+    """Equity now minus the account at midnight ET (pnl.pnl_since)."""
     since = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    start = pnl.compute(fills=[f for f in fills if f["ts"] < since])
-    for ml in start["markets"]:
-        close = _event_close(ml.ticker.rsplit("-", 1)[0])
-        if ml.net_contracts and close and datetime.fromisoformat(close).timestamp() <= since:
-            final, price, result = pnl.check_settlement(engine.client, ml.ticker)
-            if final:
-                ml.settle(price, result)
-    base = sum(ml.realized_pnl_cents - ml.total_fees_cents for ml in start["markets"]) / 100
-    return round(equity_usd - (pnl.STARTING_BALANCE_USD + base), 2)
+    return pnl.pnl_since(fills, since, equity_usd, _settled_by)
+
+
+# The dashboard's P&L bars: the last 1/7/30 days, 1/4/12 weeks, 1/3/6 months.
+PERIOD_DAYS = (1, 7, 28, 30, 84, 91, 182)
+
+
+def _period_usd(fills, equity_usd):
+    now = time.time()
+    return {str(d): pnl.pnl_since(fills, now - d * 86400, equity_usd, _settled_by) for d in PERIOD_DAYS}
 
 
 def _pnl_summary():
@@ -183,6 +192,7 @@ def _pnl_summary():
         "recent_fills": fills[-40:][::-1],
         "settlement": _settlement(s["markets"]),
         "today_usd": _today_usd(fills, s["equity_usd"]),
+        "periods": _period_usd(fills, s["equity_usd"]),
     }
     with _cache_lock:
         _cache["pnl"] = (time.time(), value)
