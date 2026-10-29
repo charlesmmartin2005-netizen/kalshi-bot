@@ -4,7 +4,8 @@ works for the fair-value strategy:
 
   - BTC daily markets (5pm ET close), the setup the backtests tested.
   - The soonest event with at least MIN_HOURS left (the model isn't trusted
-    in the last 2h), up to MAX_HOURS out.
+    in the last 3h, fair_value.CRYPTO_MIN_HOURS_TO_TRADE), up to MAX_HOURS
+    out.
   - Strikes priced nearest 50¢, where prices react most to spot moves and
     so where Kalshi quotes lag most. Deep in-the-money strikes (~95¢) barely
     move and give the bot almost nothing to catch.
@@ -29,9 +30,9 @@ from kalshi_client import build_client, dollars_to_cents
 
 PLAN = (("KXBTCD", 6),)
 # Daily events open 25h before close; the backtests only traded that
-# window. Between ~3 and 4pm ET (today's event inside its last 2h, tomorrow's
+# window. Between ~2 and 4pm ET (today's event inside its last 3h, tomorrow's
 # not open yet) there is deliberately nothing to pick.
-MIN_HOURS, MAX_HOURS = 2.0, 26.0
+MIN_HOURS, MAX_HOURS = fair_value.CRYPTO_MIN_HOURS_TO_TRADE, 26.0
 MAX_SPREAD = 4
 PRICE_BAND = (10, 90)
 

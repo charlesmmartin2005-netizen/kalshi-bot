@@ -17,6 +17,10 @@ StandardOutput=null
 StandardError=append:/home/ubuntu/kalshi-bot/logs/crash.log
 Restart=always
 RestartSec=10
+# The market sweep runs as a child process. If it outgrows the box's 909 MB
+# the kernel kills it; systemd's default (OOMPolicy=stop) then stopped the
+# whole bot too, four times on 2026-10-28. Keep trading instead.
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target

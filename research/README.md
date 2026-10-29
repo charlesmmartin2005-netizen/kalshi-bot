@@ -14,8 +14,132 @@ own fair_value / plan_quotes / RiskManager code.
     scp kalshi-bot:kalshi-bot/fills_log.jsonl fills_log.server.jsonl   # the bot's ledger is on the server
     python research/paper_markouts.py --since 2026-10-22 --ledger fills_log.server.jsonl
 
+    python research/lab_1s.py grid --cache cache --model pess [--only NAME ...] [--part 1/2]
+    python research/lab_1s.py report        # every change vs live, day by day, per fill model
+
 Kalshi's API returns these markets without strike data before ~Aug 17, so two
 months is all the history there is.
+
+## 2026-10-29: the live week, and 30 changes under four fill models
+
+Sources: the server's ledger 10-22 → 10-28 (353 paper fills), its logs, the
+same week replayed (`research/cache_live`), and `lab_1s.py grid`: 30 changes
+to the live settings, each under four fill models on both months, paired day
+by day against live. `lab_1s.py` is the 1-second harness, now in the repo; it
+needs Binance's 1-second klines (data.binance.vision) in
+`research/cache_binance/` (272 MB, gitignored).
+
+**What happened live**
+
+- The week's biggest loss wasn't the strategy. 33 resting fills booked when
+  the PC woke from sleep (10-26 14:47 CT after 4¼ h, 10-27 11:03), at
+  pre-sleep prices, lost $115, more than the week's net (−$52). Without them
+  the week made +$64. The server doesn't sleep, but real orders left resting
+  while nothing watches them do the same, and nothing cancels a previous
+  run's orders at startup (`kalshi_client.cancel_all_orders` is never called).
+- The server bot was stopped by the OOM killer four times on 10-28
+  (12:06–14:35 CDT). Each time a ~685 MB child process was killed (the
+  journal has no "main process exited"), and the sweep subprocess was timing
+  out on every run then (since 02:37, on a 909 MB box). The unit's
+  `OOMPolicy=stop` then stops the whole service. Since the 14:35 restart,
+  sweeps finish in ~41 s at ~340 MB.
+- Takes made +4.1¢ a contract a minute after the fill (fee 1.4¢). Those with
+  more than 14 h to close made +1.5¢ (+0.2¢ after the fee); those within 14 h
+  made +5.1¢.
+- Resting fills outside the wake-ups: −0.1¢ after a minute, −1.3¢ after five.
+
+**How far the lab is from live** (the four days the bot traded, replayed)
+
+- The lab sees a fifth of the takes: 342 contracts against 1,873 live. Most
+  live takes catch gaps that open and close within a minute, which
+  end-of-minute snapshots miss, so take rules are under-tested here.
+- Live resting fills sit between the normal and pess models (normal: more
+  fills, −1.9¢ after a minute; mid +3.8¢ on these days). Judge resting-quote
+  changes on those two. On them the live settings make −$251 and +$72 a
+  month; mid and opt say +$137 and +$216.
+
+**The grid**: $ a month against live, both months pooled, t in brackets, ✓ =
+better in both months; then sd/day and worst day under normal / pess / mid /
+opt:
+
+| Change | normal | pess | mid | opt | sd/day | Worst day |
+|---|---|---|---|---|---|---|
+| Live settings | | | | | $26 / 30 / 30 / 34 | −$110 / −61 / −81 / −45 |
+| **No takes with >14 h to close** | +30 (0.7) ✓ | +25 (0.5) ✓ | +64 (1.2) ✓ | +65 (1.5) ✓ | $23 / 26 / 23 / 32 | −$78 / −42 / −34 / −29 |
+| No takes with >18 h to close | +22 (0.6) ✓ | +42 (0.9) ✓ | +74 (1.6) ✓ | +73 (2.1) ✓ | $23 / 26 / 24 / 32 | −$78 / −42 / −34 / −29 |
+| >14 h rule + stop 3 h before close | +129 (2.0) ✓ | +28 (0.5) ✓ | +63 (1.0) ✓ | +68 (1.4) ✓ | $21 / 25 / 23 / 31 | −$42 / −42 / −37 / −35 |
+| >14 h rule + 3 h stop + quotes 8¢ | +253 (3.2) ✓ | +121 (1.9) ✓ | +58 (0.8) ✓ | +45 (0.9) ✓ | $22 / 28 / 24 / 29 | −$47 / −50 / −41 / −39 |
+| Quotes 8¢ from the model | +138 (2.1) ✓ | +13 (0.2) | −59 (−1.4) | −54 (−0.8) | $30 / 38 / 35 / 38 | −$123 / −141 / −141 / −136 |
+| Stop 3 h before close | +106 (2.5) ✓ | +4 (0.2) | −4 (−0.2) | +6 (0.3) | $24 / 30 / 29 / 33 | −$59 / −58 / −72 / −39 |
+| Resting quotes only to reduce | +250 (3.9) ✓ | −39 (−0.6) | −98 (−3.0) | −169 (−1.7) | $20 / 23 / 26 / 22 | −$64 / −65 / −91 / −63 |
+| Takes 5 at 4–6¢ gaps, 15 at 6¢+ | −10 (−0.4) | −36 (−0.9) | −49 (−1.2) | −22 (−0.6) | $25 / 25 / 22 / 30 | −$123 / −54 / −68 / −44 |
+| Take edge 6¢ | −7 (−0.2) | −29 (−0.5) | −20 (−0.3) | −3 (−0.1) | $23 / 23 / 18 / 29 | −$100 / −51 / −57 / −47 |
+| No takes | −8 (−0.1) | −43 (−0.5) | −28 (−0.3) | −12 (−0.2) | $19 / 20 / 12 / 27 | −$67 / −39 / −21 / −30 |
+| Exit takes after 60 min | −12 (−0.2) | −45 (−0.6) | −23 (−0.3) | −26 (−0.4) | $19 / 21 / 16 / 26 | −$69 / −42 / −38 / −33 |
+| Quotes 4¢ from the model | −377 (−6.1) | −49 (−0.9) | +29 (0.6) ✓ | +115 (2.1) ✓ | $29 / 26 / 26 / 37 | −$130 / −60 / −51 / −34 |
+| Quote size 5 | +144 (2.5) ✓ | −150 (−2.3) | −147 (−2.2) | −179 (−2.5) | $16 / 19 / 16 / 19 | −$73 / −63 / −63 / −54 |
+
+Only the take window is better in both months under every fill model, and it
+also lowers sd/day and the worst day under all four. 14–18 h is a plateau;
+8–12 h cut profitable takes on Sep–Oct. The gain comes from the takes made far
+from the close: take P&L goes from about −$105 to about +$77 a month, but
+resting quotes had been earning $110–160 of that back by unwinding those
+positions. It helps
+on 16–23 of the ~30 days it changes and hurts on 7–14; under normal fills
+the gain rests on its three best days. For a daily market, hours to close
+and time of day are the same thing: >14 h is the 5pm CT open until ~2am.
+
+Wider quotes and stopping earlier pay only under the harsh fill models.
+Quotes 8¢ from the model, on their own, are worse on Aug–Sep under 3 of 4
+models and make the worst day −$123 to −$141. With the take window they're
+better in all 8 cells, but that combination was picked from these same two
+months out of 30 candidates; the live week's replay is neutral (+$32 normal,
+−$35 mid over 7 days).
+
+Ruled out: smaller takes on 4–6¢ gaps, a higher take edge, no takes, exits
+after N minutes, 4¢ quotes, and dropping the delta lean or inventory skew
+(both make the worst day −$118 to −$185). No call possible on resting quotes
+only to reduce, or quote size 5: big wins under normal fills, big losses
+under the other three. A guard against quoting when the model and mid
+disagree by 8–12¢ almost never triggers. And `take_size` above `quote_size`
+does nothing: `plan_quotes` caps a take at the quote size.
+
+**Recommendations, in order**
+
+1. Before trading real money: cancel the account's resting orders at
+   startup, and set `OOMPolicy=continue` in `kalshi-bot.service`, so a
+   runaway sweep can't stop trading.
+2. No takes with more than 14 h to close. This needs a new setting (the bot
+   has no take window; the 2-hour stop is `CRYPTO_MIN_HOURS_TO_TRADE` in
+   `fair_value.py`). The lab expects +$25–65 a month while seeing a fifth of
+   the live takes, and the live markouts point the same way. Paper-trade it
+   and watch the take markouts by hours to close.
+3. Only if 2 holds up: quotes 8¢ from the model and a 3-hour stop. On top of
+   the take window they added $96–223 a month under the harsh fill models
+   (−$6 to −$20 under the optimistic ones), but were fitted on the same two
+   months.
+
+**Done the same day (in the code, not yet deployed):** all three.
+`engine.start` cancels resting orders on the coin series it trades, and on
+watched markets, before trading live; it refuses to start if it can't list
+them. `kalshi-bot.service` has `OOMPolicy=continue`, which
+`deploy-server.ps1` installs. `config.py` has `min_edge_cents` 8 and
+`max_take_hours` 14 (checked in `plan_quotes`), `fair_value.py` stops at 3h,
+and auto-pick follows that constant.
+
+The lab's "live since 10-29" row runs `config.py` through the bot's own rules.
+It matches the combined row in 5 of 8 cells and is $2–11 a month lower in
+the other three: a take the bot doesn't plan no longer shrinks the resting
+quote on that side. Against the old live settings, per month: normal −$3 vs
+−$251 (+$248, t 3.1), pess +$193 vs +$72 (+$121, t 1.9), mid +$190 vs +$137
+(+$53), opt +$261 vs +$216 (+$45). It's better in both months under all four,
+with lower sd/day and a smaller worst day in each (normal −$47 vs −$110).
+`strategy_lab`'s Q and the lab's baseline stay pinned to the old settings
+(R is the new one), so earlier tables still reproduce.
+
+Lab fixes alongside: `strategy_lab.py fetch` kept only event tickers ending
+in "17", so it dropped 10-28's daily event (`KXBTCD-26OCT2817B`, 81 strikes)
+for a two-day one opened 10-26. It now keeps the B event.
 
 ## 2026-10-28: close takes after a fixed hold? No, keep holding them
 

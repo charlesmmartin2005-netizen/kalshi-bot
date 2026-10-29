@@ -63,7 +63,12 @@ class RiskConfig:
     # only wide ones pay. With BTC only, 6¢ was the one setting positive in
     # all six 2026-10-22 tests (two months x three fill models,
     # research/README.md); 2¢ ranged from -$694 to +$1,152 a month.
-    min_edge_cents: float = 6.0
+    # 8¢ since 2026-10-29, together with max_take_hours and the 3h model
+    # stop (fair_value.CRYPTO_MIN_HOURS_TO_TRADE): the three made +$45 to
+    # +$248 a month more than before under all four fill models, better in
+    # both months. On its own 8¢ helped only under the harsh fill models, and
+    # all three were picked on the same two months, so judge it live.
+    min_edge_cents: float = 8.0
     # How many cents inside the current best bid/ask to place your quote.
     quote_inset_cents: int = 1
     # Max contracts to quote at a time per side.
@@ -110,6 +115,15 @@ class RiskConfig:
     # cost nothing in the 2026-10-22 tests (mean +$143 vs +$145 a month);
     # the 1-minute backtest can't show the fast take bursts it's aimed at.
     max_take_book_delta_usd: float | None = 50.0
+    # No takes earlier than this many hours before close (for the daily
+    # markets: none from the 5pm CT open until ~2am). Far from the close a
+    # model gap is more often the model being wrong than the book lagging:
+    # paper takes with >14h left made +0.2¢ a contract a minute later after
+    # the fee, those within 14h +3.6¢ (10-22..10-28), and blocking them made
+    # $25-65 a month more in both months under all four fill models
+    # (research/README.md, 2026-10-29). 14-18h all did; 8-12h cut good takes.
+    # None = take any time the model is tradeable.
+    max_take_hours: float | None = 14.0
 
     # --- Timing / staleness controls ---
     # Cancel and re-quote if a resting order has been open longer than this

@@ -10,7 +10,8 @@ Two modes:
     fee + min_edge below fair value, sell at least that far above. If the
     book's own touch is better for us, improve it by `quote_inset_cents`
     instead. Takes the book outright when it's mispriced vs the model by
-    `take_edge_cents` after the taker fee, up to the size shown at the touch.
+    `take_edge_cents` after the taker fee, up to the size shown at the touch,
+    but not earlier than `max_take_hours` before the close.
 
   BOOK (no model — e.g. Fed markets)
     The original strategy: 1¢ inside each side when the spread clears
@@ -80,8 +81,10 @@ def plan_quotes(book: dict, position: int, cfg, allowed: set, fv=None, anchor=No
         plan.mode = "fair-value"
         f = fv.cents
         # -- take when the book is clearly wrong vs the model, never more
-        #    than the touch shows
-        if cfg.enable_taking:
+        #    than the touch shows, and not too far from the close
+        too_early = (cfg.max_take_hours is not None and fv.hours_left is not None
+                     and fv.hours_left > cfg.max_take_hours)
+        if cfg.enable_taking and not too_early:
             if ask is not None and buy_size > 0:
                 edge = f - ask - per_contract_fee_cents(ask, maker=False)
                 n = min(cfg.take_size, buy_size, _shown(book, "yes_ask_size"))

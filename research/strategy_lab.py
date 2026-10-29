@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 import requests  # noqa: E402
 
 from config import CONFIG, RiskConfig  # noqa: E402
-from fair_value import FairValue, _crypto_prob  # noqa: E402
+from fair_value import CRYPTO_MIN_HOURS_TO_TRADE, FairValue, _crypto_prob  # noqa: E402
 from fees import order_fee_cents, per_contract_fee_cents  # noqa: E402
 from kalshi_client import build_client, dollars_to_cents  # noqa: E402
 from risk_manager import RiskManager  # noqa: E402
@@ -74,11 +74,17 @@ def settled_daily_events(client, series, days, skip_days=0):
             params["cursor"] = cursor
         r = client._request("GET", "/events", params=params, authenticated=False)
         evs = r.get("events", [])
-        out += [e["event_ticker"] for e in evs if e["event_ticker"].endswith("17")]
+        out += [e["event_ticker"] for e in evs if e["event_ticker"].endswith(("17", "17B"))]
         cursor = r.get("cursor")
         if not cursor or not evs or (out and ticker_close(out[-1]) < cutoff):
             break
-    return sorted(e for e in set(out) if cutoff <= ticker_close(e) < newest)
+    # Some days have two events for the same 5pm close: on 2026-10-28,
+    # KXBTCD-26OCT2817 opened two days ahead (41 strikes) and the daily
+    # KXBTCD-26OCT2817B (81 strikes) is the one the bot traded. Keep the B.
+    by_day = {}
+    for e in sorted(set(out)):
+        by_day[e.rstrip("B")] = e
+    return sorted(e for e in by_day.values() if cutoff <= ticker_close(e) < newest)
 
 
 def coinbase(product, gran, start, end):
@@ -380,7 +386,8 @@ def run_day(v: Variant, evs):
                     fills.append((i, ev, t, action, px, size, "unwind"))
                     unwinds.remove(u)
                     net = risk.net(t)
-                fv =FairValue(min(99, max(1, probs[t] * 100 + lean.get(t, 0))), "crypto", "", tradeable)
+                fv =FairValue(min(99, max(1, probs[t] * 100 + lean.get(t, 0))), "crypto", "", tradeable,
+                              hours_left=hours_left)
                 sides, _ = risk.allowed_sides(t)
                 if t not in watched[s]:          # rolled off: only work the position down
                     net = risk.net(t)
@@ -389,7 +396,7 @@ def run_day(v: Variant, evs):
                 plan = plan_quotes(book, risk.net(t), v.cfg, sides, fv, anchor=probs[t] * 100)
                 if lean and not v.lean_takes:
                     # takes judged on the raw model; the lean only moves resting quotes
-                    raw = FairValue(min(99, max(1, probs[t] * 100)), "crypto", "", tradeable)
+                    raw = FairValue(min(99, max(1, probs[t] * 100)), "crypto", "", tradeable, hours_left=hours_left)
                     plan.takes = plan_quotes(book, risk.net(t), v.cfg, sides, raw).takes
                 if cap is not None and plan.takes:
                     # MarketMaker._cap_take_delta: no take past cap $ per 1% of
@@ -489,7 +496,8 @@ def run_day(v: Variant, evs):
 BASE = RiskConfig(max_position_per_market=25, max_total_exposure_usd=200.0, max_daily_loss_usd=25.0,
                   max_single_market_loss_usd=15.0, quote_size=5, take_size=5, delta_lean_cents=0.0,
                   min_edge_cents=2.0,   # pinned: config.py's default is now 6¢
-                  min_reduce_edge_cents=None, max_take_book_delta_usd=None)   # added 2026-10-22
+                  min_reduce_edge_cents=None, max_take_book_delta_usd=None,   # added 2026-10-22
+                  max_take_hours=None)                                         # added 2026-10-29
 HIGH = replace(BASE, max_position_per_market=75, max_total_exposure_usd=900.0,
                max_daily_loss_usd=150.0, max_single_market_loss_usd=60.0,
                quote_size=15, take_size=15)
@@ -529,10 +537,15 @@ VARIANTS = [
     # (2–6¢ lean at a $15–30/1% reference all did well; stronger leans bled).
     Variant("P PROPOSED rolling ladder + delta lean", HIGH, {"KXBTCD": 6, "KXETHD": 3}, roll_min=15,
             hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False),
-    # Live settings since 2026-10-22: P's ladder and lean, BTC only, quotes
-    # 6¢ from fair value, config.py's limits.
-    Variant("Q LIVE BTC only, quotes 6c", RiskConfig(), {"KXBTCD": 6}, roll_min=15,
-            hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False),
+    # Live settings 2026-10-22..28: P's ladder and lean, BTC only, quotes
+    # 6¢ from fair value, config.py's limits. (Pinned: `holds` and the
+    # README's 10-28 numbers use it.)
+    Variant("Q LIVE BTC only, quotes 6c", replace(RiskConfig(), min_edge_cents=6.0, max_take_hours=None),
+            {"KXBTCD": 6}, roll_min=15, hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False),
+    # Live since 2026-10-29: Q with quotes 8¢ out, no takes more than 14h
+    # before close, and the model stopped 3h before close (config.py).
+    Variant("R LIVE since 10-29", RiskConfig(), {"KXBTCD": 6}, roll_min=15,
+            hedge_cents=4.0, hedge_ref_usd=30.0, lean_takes=False, min_hours=CRYPTO_MIN_HOURS_TO_TRADE),
 ]
 
 

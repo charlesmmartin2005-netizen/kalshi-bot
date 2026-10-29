@@ -58,6 +58,8 @@ class FairValue:
     # moves (0-1 units) for a 1% move in that coin — used for the delta lean.
     underlying: str = ""
     delta: float = 0.0
+    # Hours until the market closes (crypto), for RiskConfig.max_take_hours.
+    hours_left: float | None = None
 
 # Last hours before close: don't trade on the model. Re-tested 2026-10-20
 # (research/late_window.py, every minute of the last 2h over two months)
@@ -66,7 +68,10 @@ class FairValue:
 # every bucket, and taking against the book lost money in nearly every
 # bucket (often 5-13¢/contract). The book
 # knows more than the model near close.
-CRYPTO_MIN_HOURS_TO_TRADE = 2.0
+# 3h since 2026-10-29, as part of the package with 8¢ quotes and
+# RiskConfig.max_take_hours (see config.py): alone, stopping at 3h helped
+# only under the harshest fill model (research/README.md, 2026-10-29).
+CRYPTO_MIN_HOURS_TO_TRADE = 3.0
 
 
 # ---- tiny TTL cache ----------------------------------------------------------
@@ -238,7 +243,7 @@ def crypto_fair_value(market: dict) -> FairValue | None:
                      # Without a ladder fit (thin books, e.g. SOL ran 27¢ off
                      # raw) the model has nothing to anchor to — display only.
                      tradeable=hours >= CRYPTO_MIN_HOURS_TO_TRADE and n_fit >= 3,
-                     underlying=product, delta=delta)
+                     underlying=product, delta=delta, hours_left=hours)
 
 
 # ---- daily high temperature -----------------------------------------------------

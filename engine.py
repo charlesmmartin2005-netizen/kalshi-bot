@@ -22,7 +22,7 @@ import feeds
 import ledger
 import pnl
 from config import CONFIG, BotConfig
-from fair_value import CRYPTO_MIN_HOURS_TO_TRADE
+from fair_value import CRYPTO_MIN_HOURS_TO_TRADE, CRYPTO_SERIES
 from kalshi_client import build_client, normalize_orderbook, top_of_book
 from market_maker import MarketMaker
 from risk_manager import RiskManager
@@ -38,9 +38,9 @@ HISTORY_EVERY_SECONDS = 1.0  # one chart point per second (~3 minutes shown)
 LOG_LINES = 300
 ROTATE_SECONDS = 900         # auto-rotate re-centres the strikes this often (strategy: rolling ladder)
 ROLLED_OFF = "rolled off — working position down"
-NOTHING_TO_TRADE = ("Nothing to trade right now: today's BTC markets are in their last 2 hours and "
-                    "tomorrow's open at 4pm ET (3pm CT). With Auto-rotate on, the bot picks them up "
-                    "automatically within a minute.")
+NOTHING_TO_TRADE = (f"Nothing to trade right now: today's BTC markets are in their last "
+                    f"{CRYPTO_MIN_HOURS_TO_TRADE:g} hours and tomorrow's open at 4pm ET (3pm CT). With "
+                    f"Auto-rotate on, the bot picks them up automatically within a minute.")
 FETCH_WORKERS = 12
 
 # Repricing: woken by every coin tick / book change, at most every
@@ -164,6 +164,10 @@ class Engine:
                 return False, f"halted: {self.risk.halt_reason} — reset the kill switch first"
             if not self.cfg.watched_tickers and not self.auto_rotate:
                 return False, "no watched tickers — add one first"
+            if self.mode == "LIVE":
+                ok, why = self._cancel_orphaned_orders()
+                if not ok:
+                    return False, why
             self.running = True
             self.started_at = time.time()
             self._stop.clear()
@@ -186,6 +190,31 @@ class Engine:
         if self.mode == "LIVE":
             log.warning("LIVE MODE — real orders will be sent.")
         return True, "started"
+
+    def _cancel_orphaned_orders(self) -> tuple[bool, str]:
+        """Cancel orders a previous run left resting on Kalshi. Quotes are
+        tracked in memory only, so after a crash or restart nothing would
+        reprice or cancel them: on 2026-10-26 quotes left resting while the
+        PC slept 4h filled at stale prices for -$115 (paper), and the server
+        was restarted four times by the OOM killer on 2026-10-28. Only orders
+        on the coin series the bot trades, or on watched markets."""
+        try:
+            orders = self.client.get_orders(status="resting").get("orders", [])
+        except Exception as e:
+            log.error("Couldn't list resting orders before starting: %s", e)
+            return False, f"couldn't check for orders left by a previous run: {e}"
+        ours = set(self.cfg.watched_tickers)
+        for o in orders:
+            ticker = o.get("ticker", "")
+            if ticker not in ours and ticker.split("-")[0] not in CRYPTO_SERIES:
+                continue
+            try:
+                self.client.cancel_order(o["order_id"])
+                log.warning("Cancelled order %s on %s left resting by a previous run", o["order_id"], ticker)
+            except Exception as e:
+                log.error("Failed to cancel order %s on %s: %s", o.get("order_id"), ticker, e)
+                return False, f"couldn't cancel order {o.get('order_id')} left by a previous run: {e}"
+        return True, ""
 
     def stop(self, reason: str = "stopped by user") -> tuple[bool, str]:
         if not self.running:
@@ -594,6 +623,7 @@ class Engine:
                     "enable_taking": r.enable_taking, "take_edge_cents": r.take_edge_cents,
                     "min_reduce_edge_cents": r.min_reduce_edge_cents,
                     "max_take_book_delta_usd": r.max_take_book_delta_usd,
+                    "max_take_hours": r.max_take_hours,
                     "model_stop_hours": CRYPTO_MIN_HOURS_TO_TRADE,
                     "pick_window_hours": autopick.MAX_HOURS,
                 },
