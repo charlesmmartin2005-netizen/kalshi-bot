@@ -21,6 +21,7 @@ import autopick
 import feeds
 import ledger
 import pnl
+import price_bars
 from config import CONFIG, BotConfig
 from fair_value import CRYPTO_MIN_HOURS_TO_TRADE, CRYPTO_SERIES
 from kalshi_client import build_client, normalize_orderbook, top_of_book
@@ -106,6 +107,8 @@ class Engine:
 
         self.books: dict[str, dict] = {}
         self.history: dict[str, collections.deque] = {}
+        self.bars = price_bars.BarStore()    # the model's price, for long charts
+        self.bars.start()
         self.market_info: dict[str, dict] = {}
         self._depth: dict[str, tuple] = {}            # ticker -> last (yes levels, no levels)
         self._kbooks: dict[str, dict] = {}            # ticker -> latest REST-polled book
@@ -539,6 +542,7 @@ class Engine:
                 return                    # reprices run many times a second; chart one point/s
             fv = self.maker.last_plan.get(ticker, {}).get("fv")
             hist.append({"ts": now, "bid": bid, "ask": ask, "mid": mid, "fv": fv})
+            self.bars.add(ticker, now, fv)
 
     def run_forever(self):
         """Foreground mode for main.py — blocks until Ctrl+C or a halt."""

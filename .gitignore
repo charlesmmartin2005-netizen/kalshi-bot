@@ -9,3 +9,4 @@ research/cache*/
 __pycache__/
 logs/
 halted.txt
+price_bars/

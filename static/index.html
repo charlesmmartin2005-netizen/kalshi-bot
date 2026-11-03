@@ -53,6 +53,14 @@ a { color: var(--blue-2); }
 .iconbtn:hover { background: rgba(80,110,200,.14); }
 .iconbtn .bdot { position: absolute; top: 7px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--blue-2); box-shadow: 0 0 0 2px var(--app); }
 .iconbtn .bdot.crit { background: var(--loss); }
+.bellwrap { position: relative; }
+.menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: min(310px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; font-size: 13px; border: 1px solid var(--line-2); border-radius: 6px; background: radial-gradient(130% 90% at 100% 100%, rgba(28,64,200,.2), transparent 62%), var(--card); box-shadow: 0 24px 60px rgba(0,0,0,.75); }
+.menu h3 { font-size: 14px; color: #fff; }
+.menu p { margin: 0; }
+.menu .sep { margin: 6px 0; }
+.menu .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.chk { display: flex; align-items: center; gap: 9px; min-height: 28px; cursor: pointer; }
+.chk input { accent-color: var(--blue); width: 16px; height: 16px; margin: 0; flex: none; }
 .runlight { width: 22px; height: 22px; border-radius: 50%; flex: none; border: 2px solid rgba(255,255,255,.85); background: #3b4660; }
 .runlight.run { background: radial-gradient(circle at 35% 30%, #8dffc0, var(--gain) 60%); box-shadow: 0 0 12px rgba(47,210,122,.6); }
 .runlight.halt { background: radial-gradient(circle at 35% 30%, #ffb0b6, var(--loss) 60%); box-shadow: 0 0 12px rgba(255,71,87,.6); }
@@ -216,6 +224,13 @@ h2, h3 { margin: 0; font-weight: 500; }
 .toggle input { accent-color: var(--blue); width: 16px; height: 16px; margin: 0; }
 .input { min-height: 38px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--well); width: 300px; max-width: 100%; }
 .input::placeholder { color: var(--ink-3); }
+.input.sm { min-height: 32px; width: 210px; padding: 0 10px; font-size: 12.5px; }
+.thsort { border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; white-space: nowrap; }
+.thsort:hover, .thsort.on { color: var(--blue-2); }
+.thsort.on::after { content: " \25BE"; }
+.thsort.on.asc::after { content: " \25B4"; }
+.linkb { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.linkb:hover { color: var(--blue-2); text-decoration: underline; }
 .lgrid { display: grid; grid-template-columns: 150px minmax(0, 1fr) 84px 64px minmax(250px, 1.5fr); gap: 12px; align-items: center; font-size: 13px; }
 .lhead { padding: 0 0 10px; font-size: 10.5px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--blue); border-bottom: 1px solid var(--soft); }
 .band { min-height: 38px; border-radius: 3px; }
@@ -444,7 +459,22 @@ td .sub { color: var(--ink-2); font-size: 12px; }
   <div class="navr">
     <span class="navi" title="BTC index, median of the exchanges"><span class="coin">&#8383;</span><span class="num" id="btcPrice">—</span></span>
     <span class="navi who"><span class="avatar"><svg width="14" height="15" viewBox="0 0 32 36" aria-hidden="true"><path d="M3 24a13 13 0 0 1 26 0v7.5a2.5 2.5 0 0 1-2.5 2.5h-21A2.5 2.5 0 0 1 3 31.5z" fill="#9dbcff"/><circle cx="16" cy="5" r="3" fill="#9dbcff"/></svg></span><span class="lbl" id="modeLine">Paper trading</span></span>
-    <button type="button" class="iconbtn" id="btnBell" aria-label="Log"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><i class="bdot" id="bellDot" hidden></i></button>
+    <div class="bellwrap">
+      <button type="button" class="iconbtn" id="btnBell" aria-label="Alerts and log" aria-haspopup="true" aria-expanded="false" aria-controls="alertMenu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><i class="bdot" id="bellDot" hidden></i></button>
+      <div class="menu" id="alertMenu" hidden>
+        <h3>Alerts</h3>
+        <p class="muted small">They only work while this page is open. After a reload, browsers stay silent until you click the page once.</p>
+        <label class="chk"><input type="checkbox" id="alDesktop"> Desktop notifications</label>
+        <label class="chk"><input type="checkbox" id="alSound"> Sound</label>
+        <div class="sep"></div>
+        <span class="lab small">Alert me about</span>
+        <label class="chk"><input type="checkbox" id="alFills"> Fills</label>
+        <label class="chk"><input type="checkbox" id="alHalt"> Kill switch tripped</label>
+        <label class="chk"><input type="checkbox" id="alConn"> Lost connection or stalled bot</label>
+        <p class="small late" id="alNote" hidden></p>
+        <div class="btns"><button type="button" class="btn sm" id="alTest">Send a test alert</button><button type="button" class="btn sm" id="alLog">Open the log</button></div>
+      </div>
+    </div>
     <span class="runlight" id="runLight" role="img" aria-label="Stopped"></span>
   </div>
 </header>
@@ -531,7 +561,7 @@ td .sub { color: var(--ink-2); font-size: 12px; }
       <section class="card" style="flex:1 1 460px"><div class="card-h"><h2>Open positions</h2></div><div class="card-b" id="acPositions"></div></section>
       <section class="card" style="flex:1 1 320px"><div class="card-h"><h2>Risk and strategy</h2></div><div class="card-b stack" id="acRisk"></div></section>
     </div>
-    <section class="card"><div class="card-h"><h2>Ledger</h2><span class="grow"></span><span class="pill" role="group" aria-label="Ledger"><button type="button" class="on" data-tab="fills">Fills</button><button type="button" data-tab="bymkt">P&amp;L by market</button></span></div>
+    <section class="card"><div class="card-h"><h2>Ledger</h2><span class="pill" role="group" aria-label="Ledger"><button type="button" class="on" data-tab="fills">Fills</button><button type="button" data-tab="bymkt">P&amp;L by market</button></span><span class="grow"></span><span class="muted small num" id="ledgerCount"></span><input class="input sm" id="ledgerQ" type="search" placeholder="Search the ledger" aria-label="Search the ledger" autocomplete="off" spellcheck="false"><button type="button" class="btn sm" id="ledgerCsv">Export CSV</button></div>
       <div class="card-b"><div class="tablewrap" id="ledger"></div></div>
     </section>
     <section class="card" id="logCard"><div class="card-h"><h2>Log</h2><span class="grow"></span><span class="muted small num" id="logCount"></span></div>
@@ -542,8 +572,9 @@ td .sub { color: var(--ink-2); font-size: 12px; }
   <section id="view-scanner" class="stack" style="gap:22px" hidden>
     <section class="card"><div class="card-h">
       <span class="pill" id="scanTabs" role="group" aria-label="Strategy"><button type="button" class="stab on" data-stab="fair-value">Fair value</button><button type="button" class="stab" data-stab="book">Spread capture</button><button type="button" class="stab" data-stab="rejected">Rejected</button></span>
-      <span class="muted small num" id="scanMeta"></span><span class="grow"></span>
-      <button type="button" class="btn sm" id="btnScan">Rescan</button></div>
+      <span class="muted small num" id="scanMeta"></span><span class="grow"></span><span class="muted small num" id="scanCount"></span>
+      <input class="input sm" id="scanQ" type="search" placeholder="Search markets" aria-label="Search the scanner" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn sm" id="scanCsv">Export CSV</button><button type="button" class="btn sm" id="btnScan">Rescan</button></div>
       <div class="card-b stack" style="gap:8px"><p class="muted small" id="scanNote" style="margin:0"></p><div class="tablewrap" id="scanner" style="max-height:520px"><div class="empty">Sweeping every open market (about 15 s)…</div></div></div>
     </section>
     <section class="card"><div class="card-h"><h2>Arbitrage</h2><span class="grow"></span><span class="muted small num" id="arbMeta"></span></div><div class="card-b stack" id="arb" style="gap:10px"><div class="empty">Waiting for the first sweep…</div></div></section>
@@ -558,7 +589,7 @@ td .sub { color: var(--ink-2); font-size: 12px; }
           <span class="grow"></span>
           <label>Candles of <select class="sel" id="dSrc"><option value="fv">Model</option><option value="mid">Market mid</option></select></label>
         </div>
-        <div class="dtool"><select class="sel" id="dInt" aria-label="Candle length"><option value="5">5s</option><option value="10">10s</option><option value="15">15s</option></select><span id="dToolInfo"></span></div>
+        <div class="dtool"><select class="sel" id="dInt" aria-label="Candle length"><option value="5">5s</option><option value="10">10s</option><option value="15">15s</option><option value="60">1m</option><option value="300">5m</option><option value="900">15m</option><option value="3600">1h</option></select><span id="dToolInfo"></span></div>
         <div class="dbody" id="dBody"></div>
       </section>
       <div class="tiles" id="dTiles"></div>
@@ -626,7 +657,8 @@ const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "
 // View settings kept in this browser across reloads. Each list starts with
 // the default; a value that's missing, or no longer on the list, gets it.
 const PREF_CHOICES = {pnlUnit: Object.keys(PERIODS), posSort: ["strike", "n", "value", "open", "alloc"], wSort: ["money", "movers"],
-  hSel: [5, 1, 60], hhSel: [5, 60], ledgerTab: ["fills", "bymkt"], scanTab: ["fair-value", "book", "rejected"], dSrc: ["fv", "mid"], dInt: [5, 10, 15]};
+  hSel: [5, 1, 60], hhSel: [5, 60], ledgerTab: ["fills", "bymkt"], scanTab: ["fair-value", "book", "rejected"], dSrc: ["fv", "mid"], dLen: [60, 5, 10, 15, 300, 900, 3600],
+  alDesktop: [false, true], alSound: [false, true], alFills: [true, false], alHalt: [true, false], alConn: [true, false]};
 const PREFS_KEY = "kalshi-bot-view";
 function loadPrefs() {
   let saved = {};
@@ -634,10 +666,16 @@ function loadPrefs() {
   return Object.fromEntries(Object.entries(PREF_CHOICES).map(([k, opts]) => [k, opts.includes(saved[k]) ? saved[k] : opts[0]]));
 }
 function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({pnlUnit, posSort, wSort, hSel, hhSel, ledgerTab, scanTab, dSrc: $("dSrc").value, dInt: +$("dInt").value})); }
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({pnlUnit, posSort, wSort, hSel, hhSel, ledgerTab, scanTab, dSrc: $("dSrc").value, dLen: +$("dInt").value, ...al,
+    sorts: {...savedSorts, ...Object.fromEntries(Object.entries(tables).map(([id, st]) => [id, {k: st.k, desc: st.desc}]))}})); }
   catch (e) { /* blocked: settings last until the next reload */ }
 }
 const prefs = loadPrefs();
+const al = {alDesktop: prefs.alDesktop, alSound: prefs.alSound, alFills: prefs.alFills, alHalt: prefs.alHalt, alConn: prefs.alConn};
+// Each table's sort is remembered too. Sort keys are checked when a table draws.
+const tables = {};
+let savedSorts = {};
+try { savedSorts = JSON.parse(localStorage.getItem(PREFS_KEY)).sorts || {}; } catch (e) { /* none saved yet */ }
 
 let S = null, MK = null, scanData = null, arbData = null;
 let view = "overview", detailT = null, backTo = "overview";
@@ -736,6 +774,80 @@ async function confirmKill() {
   if (go) act("POST", "/api/kill", null, "Kill switch engaged");
 }
 
+/* ---------- alerts: desktop notifications and sound, while this page is open ---------- */
+const CONN_ALERT_SECONDS = 20;   // long enough that a restart or a blip stays quiet
+const TONES = {fills: [[880, .09]], halt: [[660, .16], [440, .16], [660, .16], [440, .24]], conn: [[392, .18], [294, .28]], ok: [[523, .09], [784, .14]], test: [[523, .09], [659, .09], [784, .14]]};
+const loadedAt = Date.now();
+let audio = null, lastFillTs = null, connAlerted = null;
+function beep(kind) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === "suspended") audio.resume();
+    let t = audio.currentTime + .01;
+    for (const [hz, len] of TONES[kind]) {
+      const osc = audio.createOscillator(), gain = audio.createGain();
+      osc.frequency.value = hz; osc.connect(gain); gain.connect(audio.destination);
+      gain.gain.setValueAtTime(.0001, t); gain.gain.exponentialRampToValueAtTime(.18, t + .01); gain.gain.exponentialRampToValueAtTime(.0001, t + len);
+      osc.start(t); osc.stop(t + len); t += len + .03;
+    }
+  } catch (e) { /* no audio here: the alert still shows */ }
+}
+// A desktop notification when this window isn't in front, otherwise a toast.
+function sendAlert(kind, title, body, go, force = false) {
+  if (!al.alDesktop && !al.alSound) return;
+  if (al.alSound) beep(kind);
+  const urgent = kind === "halt" || kind === "conn";
+  if (al.alDesktop && "Notification" in window && Notification.permission === "granted" && (force || !document.hasFocus())) {
+    try {
+      const n = new Notification(title, {body, tag: "kalshi-" + (kind === "ok" ? "conn" : kind), renotify: true, icon: "/static/icon-192.png", requireInteraction: urgent});
+      n.onclick = () => { window.focus(); n.close(); if (go) go(); };
+      return;
+    } catch (e) { /* this browser can't construct one: fall through to the toast */ }
+  }
+  toast(`${title}. ${body}`, urgent);
+}
+function fillLine(f) { return `${f.action === "buy" ? "Bought" : "Sold"} ${f.count}${f.side === "yes" ? "" : " NO"} ${marketName(f.ticker)} at ${f.price_cents}¢`; }
+function watchEvents(prev) {
+  const fills = S.pnl.recent_fills || [], newest = fills.length ? fills[0].ts : 0;
+  if (lastFillTs == null) lastFillTs = newest;        // what was already there when the page opened isn't news
+  else if (newest > lastFillTs) {
+    const fresh = fills.filter(f => f.ts > lastFillTs);
+    lastFillTs = newest;
+    if (al.alFills) sendAlert("fills", fresh.length === 1 ? "New fill" : `${fresh.length} new fills`,
+      fresh.slice(0, 3).map(fillLine).join("\n") + (fresh.length > 3 ? `\nand ${fresh.length - 3} more` : ""), () => setView("activity"));
+  }
+  if (prev && !prev.risk.halted && S.risk.halted && al.alHalt) sendAlert("halt", "Kill switch tripped", S.risk.halt_reason || "Trading is halted.", () => setView("overview"));
+}
+function watchHealth(h) {
+  const silent = (Date.now() - (lastOk || loadedAt)) / 1000;
+  const problem = h.k === "warn" ? "warn" : h.k === "down" && (connAlerted === "down" || silent >= CONN_ALERT_SECONDS) ? "down" : null;
+  if (problem === connAlerted) return;
+  connAlerted = problem;
+  if (!al.alConn) return;
+  if (problem === "down") sendAlert("conn", "Lost connection to the bot", lastOk ? `No data since ${t2(lastOk / 1000)}.` : "It hasn't answered since this page opened.");
+  else if (problem === "warn") sendAlert("conn", "Trading loop stalled", `It last ran at ${t2(h.since)}.`);
+  else sendAlert("ok", "Bot is back", "Data is updating again.");
+}
+function alertNote(msg) { $("alNote").textContent = msg; $("alNote").hidden = !msg; }
+function syncAlertMenu() {
+  const granted = "Notification" in window && Notification.permission === "granted";
+  if (al.alDesktop && !granted) al.alDesktop = false;   // turned off in the browser since
+  for (const id of Object.keys(al)) $(id).checked = al[id];
+}
+function showAlertMenu(open) {
+  $("alertMenu").hidden = !open; $("btnBell").setAttribute("aria-expanded", open);
+  if (open) { syncAlertMenu(); alertNote(""); }
+}
+async function setDesktopAlerts(on) {
+  alertNote("");
+  if (on && !("Notification" in window)) { alertNote("This browser can't show notifications here."); on = false; }
+  else if (on && Notification.permission !== "granted") {
+    const answer = await Notification.requestPermission();
+    if (answer !== "granted") { alertNote("Notifications are blocked for this page. Allow them in your browser's site settings, then turn this on again."); on = false; }
+  }
+  al.alDesktop = on; $("alDesktop").checked = on; savePrefs();
+}
+
 /* ---------- status: what the page can vouch for right now ---------- */
 // The running flag can't say on its own: it stays true if the trading loop
 // stalls, and the last numbers stay on screen if the tunnel or server drops.
@@ -768,6 +880,7 @@ function renderStatus() {
   const halt = S && S.risk.halted ? `<div class="banner"><b>Kill switch tripped.</b> ${esc(S.risk.halt_reason)}. Reset it at the top right to trade again.</div>` : "";
   const html = conn + live + halt;
   if (html !== bannerHtml) $("banner").innerHTML = bannerHtml = html;
+  watchHealth(h);
 }
 
 /* ---------- small SVG pieces ---------- */
@@ -840,48 +953,100 @@ function lineChart(el, {series, height = 220, yFmt = (v) => v, xFmt = t2, area =
   svg.addEventListener("mouseleave", () => { hov.innerHTML = ""; tip.style.opacity = 0; });
 }
 
-/* ---------- candlestick chart: the model (or mid) in candles, the market's bid and ask as levels ---------- */
-function candleChart(el, m, src, secs) {
-  const h = m.history || [], b = m.book || {};
-  if (!h.some(p => p[src] != null)) src = "mid";
-  const pts = h.filter(p => p[src] != null);
-  if (pts.length < 2) { el.innerHTML = `<div class="empty" style="height:390px;display:grid;place-items:center">Collecting prices… the chart fills in as the bot reads the book.</div>`; return; }
-  const by = new Map();
-  for (const p of pts) {
-    const k = Math.floor(p.ts / secs), v = p[src];
-    let c = by.get(k); if (!c) by.set(k, c = {t: k * secs, o: v, h: v, l: v, c: v, gaps: []});
-    c.h = Math.max(c.h, v); c.l = Math.min(c.l, v); c.c = v;
-    if (p.fv != null && p.mid != null) c.gaps.push(p.fv - p.mid);
+/* ---------- candlestick chart: the model (or mid) in candles, the market's bid and ask as levels, our fills marked ---------- */
+// One market's long history and all its fills (/api/history), for the chart on screen.
+const HIST_REFRESH_MS = 30000;
+let dHist = {t: null, rows: [], fills: [], at: 0, loaded: false, err: null, loading: false};
+async function loadHist() {
+  const t = detailT;
+  if (!t) return;
+  if (dHist.t !== t) dHist = {t, rows: [], fills: [], at: 0, loaded: false, err: null, loading: false};
+  if (dHist.loading || Date.now() - dHist.at < HIST_REFRESH_MS) return;
+  const h = dHist, since = h.rows.length ? h.rows[h.rows.length - 1][0] - 60 : 0;   // the newest minute may have changed
+  h.loading = true;
+  try {
+    const j = await api("GET", `/api/history/${encodeURIComponent(t)}?since=${since}`, null, 30000);
+    const first = j.rows.length ? j.rows[0][0] : Infinity;
+    h.rows = h.rows.filter(r => r[0] < first).concat(j.rows); h.fills = j.fills; h.loaded = true; h.err = null;
+  } catch (e) { h.err = e.message; }
+  h.at = Date.now(); h.loading = false;
+  if (view === "market" && dHist === h) renderMarket();
+}
+// Seconds come from the poll's last 3 minutes; a minute and longer from the long history.
+function buildCandles(m, src, secs) {
+  const by = new Map(), rows = dHist.t === detailT ? dHist.rows : [], hist = (m && m.history) || [];
+  const put = (t, o, h, l, c, vol, gap) => {
+    const k = Math.floor(t / secs) * secs;
+    let b = by.get(k); if (!b) by.set(k, b = {t: k, o, h, l, c, vol: 0, gaps: []});
+    b.h = Math.max(b.h, h); b.l = Math.min(b.l, l); b.c = c; b.vol += vol || 0;
+    if (gap != null) b.gaps.push(gap);
+  };
+  if (secs < 60) {
+    if (!hist.some(p => p[src] != null)) src = "mid";
+    for (const p of hist) if (p[src] != null) put(p.ts, p[src], p[src], p[src], p[src], 0, p.fv != null && p.mid != null ? p.fv - p.mid : null);
+  } else {
+    if (!rows.some(r => r[6] != null)) src = "mid";
+    const at = src === "fv" ? 6 : 1;
+    for (const r of rows) if (r[at] != null) put(r[0], r[at], r[at + 1], r[at + 2], r[at + 3], r[5], r[9] != null && r[4] != null ? r[9] - r[4] : null);
   }
   const cs = [...by.values()];
   cs.forEach(c => c.gap = c.gaps.length ? c.gaps.reduce((a, x) => a + x, 0) / c.gaps.length : 0);
+  return {cs, src};
+}
+function candleChart(el, {cs, src}, book, fills, secs) {
+  const b = book || {};
+  if (!cs.length) {
+    const msg = secs < 60 ? "Collecting prices… the chart fills in as the bot reads the book." : dHist.err ? "Couldn't load the price history: " + dHist.err : dHist.loaded ? "No price history for this market yet." : "Loading the price history…";
+    el.innerHTML = `<div class="empty" style="height:390px;display:grid;place-items:center">${esc(msg)}</div>`; return;
+  }
   const W = Math.max(300, el.clientWidth), H = 390, P = {l: 6, r: 52, t: 44, b: 22}, volH = 46, pb = H - P.b - volH - 10;
-  const lv = [...cs.flatMap(c => [c.h, c.l]), b.yes_bid, b.yes_ask].filter(v => v != null);
-  let y0 = Math.min(...lv), y1 = Math.max(...lv); const pad = Math.max((y1 - y0) * 0.12, 0.6); y0 -= pad; y1 += pad;
-  const slot = (W - P.l - P.r) / cs.length, bw = Math.max(2, Math.min(14, slot * 0.62));
-  const X = (i) => P.l + slot * (i + 0.5), Y = (v) => P.t + (1 - (v - y0) / (y1 - y0)) * (pb - P.t);
+  const end = cs[cs.length - 1].t, start = Math.max(cs[0].t, end - ((W < 520 ? 60 : 120) - 1) * secs), n = (end - start) / secs + 1;
+  const win = cs.filter(c => c.t >= start), at = new Map(win.map(c => [c.t, c]));
+  // Each fill in YES terms: long YES (a buy, or selling NO) points up, short YES points down.
+  const marks = fills.filter(f => f.ts >= start && f.ts < end + secs).map(f => {
+    const yes = f.side === "yes";
+    return {f, t: Math.floor(f.ts / secs) * secs, price: yes ? f.price_cents : 100 - f.price_cents, up: yes === (f.action === "buy")};
+  });
+  const lv = [...win.flatMap(c => [c.h, c.l]), b.yes_bid, b.yes_ask, ...marks.map(x => x.price)].filter(v => v != null);
+  let y0 = Math.min(...lv), y1 = Math.max(...lv); const pad = Math.max((y1 - y0) * 0.12, 0.6); y0 = Math.max(0, y0 - pad); y1 = Math.min(100, y1 + pad);
+  const slot = (W - P.l - P.r) / n, bw = Math.max(1.5, Math.min(14, slot * 0.62));
+  const X = (t) => P.l + slot * ((t - start) / secs + 0.5), Y = (v) => P.t + (1 - (v - y0) / (y1 - y0)) * (pb - P.t);
+  const stamp = secs < 60 ? t2 : secs < 900 && n * secs < 86400 ? hm : dt;
   let g = "";
   for (let i = 0; i <= 4; i++) { const v = y0 + (y1 - y0) * i / 4, y = Y(v).toFixed(1); g += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" stroke="rgba(110,140,220,.08)"/><text class="tk" x="${W - P.r + 8}" y="${+y + 3}">${v.toFixed(1)}</text>`; }
-  const every = Math.max(1, Math.round(cs.length / (W < 520 ? 3 : 6)));
-  cs.forEach((c, i) => { if (i % every === 0) g += `<line x1="${X(i).toFixed(1)}" x2="${X(i).toFixed(1)}" y1="${P.t - 6}" y2="${H - P.b}" stroke="rgba(110,140,220,.1)" stroke-dasharray="3 4"/><text class="tk" x="${X(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${esc(t2(c.t))}</text>`; });
-  const maxG = Math.max(4, ...cs.map(c => Math.abs(c.gap)));   // a 4¢ gap (the usual take threshold) fills the strip
+  const every = Math.max(1, Math.round(n / (W < 520 ? 3 : stamp === dt ? 5 : 6)));
+  for (let i = 0; i < n; i += every) { const x = X(start + i * secs).toFixed(1); g += `<line x1="${x}" x2="${x}" y1="${P.t - 6}" y2="${H - P.b}" stroke="rgba(110,140,220,.1)" stroke-dasharray="3 4"/><text class="tk" x="${x}" y="${H - 6}" text-anchor="${i === 0 && slot < 40 ? "start" : "middle"}">${esc(stamp(start + i * secs))}</text>`; }
+  // Under the candles: the model's gap to the market where there's a model, otherwise volume.
+  const showGap = win.some(c => c.gap), maxStrip = showGap ? Math.max(4, ...win.map(c => Math.abs(c.gap))) : Math.max(1, ...win.map(c => c.vol));   // a 4¢ gap (the usual take threshold) fills the strip
+  const stripName = showGap ? "Model gap" : win.some(c => c.vol) ? "Volume" : "";
   let body = "";
-  cs.forEach((c, i) => {
-    const col = c.c >= c.o ? "#26d07c" : "#ff3b4e", x = X(i), top = Y(Math.max(c.o, c.c)), bh = Math.max(1.5, Math.abs(Y(c.o) - Y(c.c)));
+  for (const c of win) {
+    const col = c.c >= c.o ? "#26d07c" : "#ff3b4e", x = X(c.t), top = Y(Math.max(c.o, c.c)), bh = Math.max(1.5, Math.abs(Y(c.o) - Y(c.c)));
     body += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${Y(c.h).toFixed(1)}" y2="${Y(c.l).toFixed(1)}" stroke="${col}" stroke-width="1.2"/><rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
-    const vh = Math.abs(c.gap) / maxG * volH;
-    if (vh > 0.3) body += `<rect class="gu" x="${(x - bw / 2).toFixed(1)}" y="${(H - P.b - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${c.gap > 0 ? "#26d07c" : "#ff3b4e"}" opacity=".8"/>`;
-  });
-  const level = (v, color, name) => v == null ? "" : `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="${color}" stroke-width="1.2"/><rect x="${W - P.r + 2}" y="${(Y(v) - 8).toFixed(1)}" width="${P.r - 4}" height="16" rx="2" fill="${color}"/><text x="${W - P.r / 2}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="500" fill="#fff">${esc(name)} ${v}</text>`;
-  el.innerHTML = `<svg class="candles" viewBox="0 0 ${W} ${H}" height="${H}" style="display:block;width:100%" role="img" aria-label="${src === "fv" ? "Model" : "Market mid"} in ${secs}-second candles against the market bid and ask">${g}
-    <text class="tk" x="${P.l}" y="${H - P.b - volH - 2}">Model gap</text><line x1="${P.l}" x2="${W - P.r}" y1="${H - P.b}" y2="${H - P.b}" stroke="${C.axis}"/>
-    ${level(b.yes_ask, "#c8303f", "Ask")}${level(b.yes_bid, "#2d5be6", "Bid")}${body}<g class="hov"></g></svg><div class="tip"></div>`;
+    const vh = (showGap ? Math.abs(c.gap) : c.vol) / maxStrip * volH;
+    if (vh > 0.3) body += `<rect class="gu" x="${(x - bw / 2).toFixed(1)}" y="${(H - P.b - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${showGap ? (c.gap > 0 ? "#26d07c" : "#ff3b4e") : "#3d63d8"}" opacity=".8"/>`;
+  }
+  const tri = marks.map(({t, price, up}) => {
+    const x = X(t), y = Y(price), d = up ? 1 : -1, s = 5.5;
+    return `<path d="M${x.toFixed(1)} ${y.toFixed(1)} L${(x - s).toFixed(1)} ${(y + d * s * 1.7).toFixed(1)} L${(x + s).toFixed(1)} ${(y + d * s * 1.7).toFixed(1)} Z" fill="${up ? C.orange : C.cyan}" stroke="#050914"/>`;
+  }).join("");
+  // The two tags stay readable when a long chart squeezes bid and ask together.
+  const askY = b.yes_ask != null ? Y(b.yes_ask) : null, bidY = b.yes_bid != null ? Y(b.yes_bid) : null, push = askY != null && bidY != null ? Math.max(0, (17 - (bidY - askY)) / 2) : 0;
+  const level = (v, y, color, name) => v == null ? "" : `<line x1="${P.l}" x2="${W - P.r}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.2"/><rect x="${W - P.r + 2}" y="${(y - 8 + (name === "Ask" ? -push : push)).toFixed(1)}" width="${P.r - 4}" height="16" rx="2" fill="${color}"/><text x="${W - P.r / 2}" y="${(y + 4 + (name === "Ask" ? -push : push)).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="500" fill="#fff">${esc(name)} ${v}</text>`;
+  const len = secs < 60 ? secs + "-second" : secs < 3600 ? secs / 60 + "-minute" : "1-hour";
+  el.innerHTML = `<svg class="candles" viewBox="0 0 ${W} ${H}" height="${H}" style="display:block;width:100%" role="img" aria-label="${src === "fv" ? "Model" : "Market mid"} in ${len} candles against the market bid and ask, with ${marks.length} of our fills marked">${g}
+    <text class="tk" x="${P.l}" y="${H - P.b - volH - 2}">${stripName}</text><line x1="${P.l}" x2="${W - P.r}" y1="${H - P.b}" y2="${H - P.b}" stroke="${C.axis}"/>
+    ${level(b.yes_ask, askY, "#c8303f", "Ask")}${level(b.yes_bid, bidY, "#2d5be6", "Bid")}${body}${tri}<g class="hov"></g></svg><div class="tip"></div>`;
   const svg = el.querySelector("svg"), hov = svg.querySelector(".hov"), tip = el.querySelector(".tip");
   svg.addEventListener("mousemove", (e) => {
-    const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(cs.length - 1, Math.floor(((e.clientX - r.left) * W / r.width - P.l) / slot))), c = cs[i];
-    hov.innerHTML = `<line class="xhair" x1="${X(i)}" x2="${X(i)}" y1="${P.t - 6}" y2="${H - P.b}" stroke="${C.ink2}" stroke-dasharray="3 3"/>`;
-    tip.innerHTML = `<div class="t">${esc(t2(c.t))}</div><div class="r"><span>Open</span><span class="v">${c.o.toFixed(1)}¢</span></div><div class="r"><span>High</span><span class="v">${c.h.toFixed(1)}¢</span></div><div class="r"><span>Low</span><span class="v">${c.l.toFixed(1)}¢</span></div><div class="r"><span>Close</span><span class="v">${c.c.toFixed(1)}¢</span></div><div class="r"><span>Model gap</span><span class="v ${tone(c.gap)}">${sc(c.gap, 1)}</span></div>`;
-    tip.style.left = Math.min(X(i) / W * r.width + 14, r.width - 150) + "px"; tip.style.top = "40px"; tip.style.opacity = 1;
+    const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) * W / r.width - P.l) / slot))), t = start + i * secs, c = at.get(t), here = marks.filter(x => x.t === t);
+    hov.innerHTML = `<line class="xhair" x1="${X(t)}" x2="${X(t)}" y1="${P.t - 6}" y2="${H - P.b}" stroke="${C.ink2}" stroke-dasharray="3 3"/>`;
+    const row = (k, v, cls = "") => `<div class="r"><span>${k}</span><span class="v ${cls}">${v}</span></div>`;
+    tip.innerHTML = `<div class="t">${esc(stamp(t))}</div>` + (c ? row("Open", c.o.toFixed(1) + "¢") + row("High", c.h.toFixed(1) + "¢") + row("Low", c.l.toFixed(1) + "¢") + row("Close", c.c.toFixed(1) + "¢") +
+      (showGap ? row("Model gap", sc(c.gap, 1), tone(c.gap)) : c.vol ? row("Volume", Math.round(c.vol).toLocaleString()) : "") : `<div class="muted">No prices</div>`) +
+      here.slice(0, 4).map(x => `<div class="r" style="color:${x.up ? C.orange : C.cyan}"><span>${x.f.action === "buy" ? "Bought" : "Sold"} ${x.f.count}${x.f.side === "yes" ? "" : " NO"}</span><span class="v">${x.f.price_cents}¢</span></div>`).join("") +
+      (here.length > 4 ? `<div class="muted">and ${here.length - 4} more fills</div>` : "");
+    tip.style.left = Math.min(X(t) / W * r.width + 14, r.width - 150) + "px"; tip.style.top = "40px"; tip.style.opacity = 1;
   });
   svg.addEventListener("mouseleave", () => { hov.innerHTML = ""; tip.style.opacity = 0; });
 }
@@ -897,7 +1062,7 @@ function renderNav() {
   $("modeLine").textContent = S.mode === "LIVE" ? "Live money" : "Paper trading";
   const warn = S.logs.filter(l => l.level !== "INFO").length;
   $("bellDot").hidden = !warn && !r.halted; $("bellDot").className = "bdot" + (r.halted || S.logs.some(l => /ERROR|CRITICAL/.test(l.level)) ? " crit" : "");
-  $("btnBell").title = $("btnBell").ariaLabel = warn ? `Log: ${warn} warning${warn === 1 ? "" : "s"} in the last ${S.logs.length} lines` : "Log: no warnings";
+  $("btnBell").title = $("btnBell").ariaLabel = "Alerts and log" + (warn ? `: ${warn} warning${warn === 1 ? "" : "s"} in the last ${S.logs.length} log lines` : "");
 }
 function renderHeader() {
   const [title, sub] = VIEWS[view];
@@ -1189,17 +1354,23 @@ function renderMarket() {
   const status = !m ? "Not watched" : m.reduce_only ? "Reduce-only" : !S.running ? "Stopped" : m.quotes.length ? "Quoting" : "Watching";
   $("dHead").innerHTML = `<div>Status<small class="lab">${status}</small></div><div>Start<small>${S.running && S.started_at ? dt(S.started_at) : "Not running"}</small></div>
     <div>Exchange<small style="color:var(--orange);display:flex;align-items:center;gap:6px"><svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 0l6 6-6 6-6-6z" fill="currentColor"/></svg>Kalshi, ${S.mode === "LIVE" ? "live" : "paper"}</small></div>`;
-  $("dToolInfo").innerHTML = `<span title="${esc(pl.fv_detail || "")}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/></svg>${pl.fv != null ? "Model" : "No model"}</span><span>Kalshi</span><span>${esc(t)}</span>`;
+  loadHist();
+  const src = $("dSrc").value, secs = +$("dInt").value, built = dTab === "performance" ? buildCandles(m, src, secs) : null;
+  const legend = dTab === "performance" ? `<span style="color:${C.orange}">&#9650; Bought</span><span style="color:${C.cyan}">&#9660; Sold</span>` : "";
+  const noModel = built && built.cs.length && built.src !== src ? `<span class="late">No model history here, so these are market mid candles</span>` : "";
+  $("dToolInfo").innerHTML = `<span title="${esc(pl.fv_detail || "")}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/></svg>${pl.fv != null ? "Model" : "No model"}</span><span>Kalshi</span><span>${esc(t)}</span>${legend}${noModel}`;
   const body = $("dBody");
   if (dTab === "performance") {
-    if (!m) body.innerHTML = `<div class="empty">Not watched, so there are no live prices. Add it on the ladder to chart it.</div>`;
+    if (!m && secs < 60) body.innerHTML = `<div class="empty">Not watched, so there are no second-by-second prices. Pick a candle length of 1m or more.</div>`;
     else {
       const old = body.querySelector(".chart");
-      if (!(old && old.matches(":hover"))) {
-        const gapNow = pl.fv != null && b.mid != null ? pl.fv - b.mid : null;
-        body.innerHTML = `<div class="chart" style="position:relative"><div class="cstats num"><div><span>Mid</span><span class="lab">${cents(b.mid)}</span></div><div><span>Model</span><span style="color:var(--orange)">${pl.fv != null ? pl.fv + "¢" : "—"}</span></div><div><span>Model gap</span><span class="${tone(gapNow)}">${gapNow == null ? "—" : sc(gapNow, 1)}</span></div>
+      if (!(old && old.matches(":hover") && old.querySelector("svg"))) {
+        const last = dHist.t === t && dHist.rows.length ? dHist.rows[dHist.rows.length - 1] : [], mid = b.mid ?? last[4] ?? null, fv = pl.fv ?? last[9] ?? null;
+        const gapNow = fv != null && mid != null ? fv - mid : null;
+        body.innerHTML = `<div class="chart" style="position:relative"><div class="cstats num"><div><span>Mid</span><span class="lab">${cents(mid)}</span></div><div><span>Model</span><span style="color:var(--orange)">${fv != null ? fv + "¢" : "—"}</span></div><div><span>Model gap</span><span class="${tone(gapNow)}">${gapNow == null ? "—" : sc(gapNow, 1)}</span></div>
           <div class="rt"><span>Yes bid</span><span class="lab">${cents(b.yes_bid)}</span><span>Yes ask</span><span class="down">${cents(b.yes_ask)}</span></div></div><div class="cbox"></div></div>`;
-        candleChart(body.querySelector(".cbox"), m, $("dSrc").value, +$("dInt").value);
+        const seen = new Set(), fills = [...(dHist.t === t ? dHist.fills : []), ...S.pnl.recent_fills.filter(f => f.ticker === t)].filter(f => !seen.has(f.ts) && seen.add(f.ts));
+        candleChart(body.querySelector(".cbox"), built, b, fills, secs);
       }
     }
   } else if (dTab === "book") {
@@ -1216,9 +1387,9 @@ function renderMarket() {
       body.innerHTML = `<p class="muted small" style="margin:0 0 10px">What the open book in ${esc(eventLabel(st.event))} pays for each BTC settlement.</p><table><thead><tr><th>BTC settles</th><th class="n">Book pays</th><th style="width:45%"></th></tr></thead><tbody>${st.bands.slice().reverse().map(x => { const here = btc != null && (x.lo == null || btc > x.lo) && (x.hi == null || btc <= x.hi);
         return `<tr${here ? ` style="background:rgba(255,138,28,.08)"` : ""}><td>${esc(bandText(x))}${here ? ` <span class="btctag num" style="padding:0 6px;font-size:11px">BTC now</span>` : ""}</td><td class="n ${tone(x.pnl_usd)}">${usd(x.pnl_usd, true)}</td><td><span class="pbar" style="height:16px"><span class="l">${x.pnl_usd < 0 ? `<span class="bneg" style="width:${(-x.pnl_usd / max * 100).toFixed(0)}%"></span>` : ""}</span><span class="z"></span><span class="r">${x.pnl_usd > 0 ? `<span class="bpos" style="width:${(x.pnl_usd / max * 100).toFixed(0)}%"></span>` : ""}</span></span></td></tr>`; }).join("")}</tbody></table>`; }
   } else {
-    const fs = S.pnl.recent_fills.filter(f => f.ticker === t);
+    const whole = dHist.t === t && dHist.loaded, fs = whole ? dHist.fills.slice().reverse() : S.pnl.recent_fills.filter(f => f.ticker === t);
     body.innerHTML = fs.length ? `<div class="tablewrap" style="max-height:340px"><table><thead><tr><th>Time</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Model</th><th>Type</th></tr></thead><tbody>${fs.map(f => `<tr><td class="num">${dt(f.ts)}</td><td class="${f.action === "buy" ? "up" : "down"}">${f.action === "buy" ? "Buy" : "Sell"} ${esc(f.side)}</td><td class="n">${f.count}</td><td class="n">${f.price_cents}¢</td><td class="n">${f.model_cents != null ? f.model_cents.toFixed(1) + "¢" : "—"}</td><td class="muted">${f.liquidity === "taker" ? "take" : "quote"}${f.strategy ? ", " + esc(f.strategy) : ""}</td></tr>`).join("")}</tbody></table></div>`
-      : `<div class="empty">No fills in this market among the last ${S.pnl.recent_fills.length}. The full ledger is under Activity.</div>`;
+      : `<div class="empty">${whole ? "No fills in this market yet." : "Loading this market's fills…"}</div>`;
   }
   const lq = MK && MK.by_liquidity, mo = (s) => s && s.mo[5] != null ? `<span class="${tone(s.mo[5] - s.fee)}">${sc(s.mo[5] - s.fee)}</span> after fee` : "Not scored yet";
   const left = m && m.close_time ? iso(m.close_time) - S.server_time : null, gapNow = pl.fv != null && b.mid != null ? pl.fv - b.mid : null;
@@ -1288,6 +1459,100 @@ function renderEdge() {
     <div class="hist">${hist.map((n, j) => `<span class="num muted small" style="text-align:center">${j === 0 ? "Hit" : j === hist.length - 1 ? j + "+" : j}</span>`).join("")}</div>` : `<div class="empty">No trades on our strikes yet.</div>`;
 }
 
+/* ---------- searchable, sortable tables with CSV export ---------- */
+// A column: k key, label, t(row) plain text shown and searched, h(row) cell
+// HTML if it needs more, v(row) value to sort by (default t), csv(row) value to
+// export (default v), s(row) extra text to search, cls(row) cell class, n
+// right-aligned number, title, csvOnly, noCsv, noSort.
+const ROW_LIMIT = 500;
+function tbl(id, k = null) { return tables[id] || (tables[id] = {k, desc: true, ...savedSorts[id]}); }
+function visibleRows(cols, rows, st, q) {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let out = !words.length ? rows : rows.filter(r => {
+    const text = cols.map(c => [c.t ? c.t(r) : "", c.s ? c.s(r) : ""].join(" ")).join(" ").toLowerCase();
+    return words.every(w => text.includes(w));
+  });
+  const col = cols.find(c => c.k === st.k && !c.noSort);
+  if (col) {
+    const val = col.v || col.t, dir = st.desc ? -1 : 1;
+    out = out.map((r, i) => [val(r), i, r]).sort((a, b) => {
+      if (a[0] == null || a[0] === "") return b[0] == null || b[0] === "" ? a[1] - b[1] : 1;     // blanks last, either way
+      if (b[0] == null || b[0] === "") return -1;
+      const cmp = typeof a[0] === "number" && typeof b[0] === "number" ? a[0] - b[0] : String(a[0]).localeCompare(String(b[0]));
+      return cmp ? cmp * dir : a[1] - b[1];
+    }).map(x => x[2]);
+  }
+  return out;
+}
+// Redraws only when something changed, so rows stay put, selectable and clickable between polls.
+function drawTable(host, id, cols, rows, {sig, q, count, csv, empty, noun}) {
+  const st = tbl(id, id === "fills" ? "ts" : null), key = [id, sig, st.k, st.desc, q].join("|");
+  if (host._key === key) return;
+  host._key = key;
+  const shown = visibleRows(cols, rows, st, q), focused = host.contains(document.activeElement) ? document.activeElement.dataset.sort : null;
+  host._view = {cols, rows: shown};
+  host.dataset.tbl = id;
+  csv.disabled = !shown.length;
+  count.textContent = q.trim() ? `${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} ${noun}` : `${rows.length.toLocaleString()} ${noun}`;
+  if (!rows.length) { host.innerHTML = `<div class="empty">${esc(empty)}</div>`; return; }
+  const vis = cols.filter(c => !c.csvOnly);
+  const th = (c) => `<th class="${c.n ? "n" : ""}"${c.title ? ` title="${esc(c.title)}"` : ""}${c.k === st.k ? ` aria-sort="${st.desc ? "descending" : "ascending"}"` : ""}>${c.noSort ? esc(c.label) : `<button type="button" class="thsort${c.k === st.k ? " on" + (st.desc ? "" : " asc") : ""}" data-sort="${esc(c.k)}"${c.n ? ' data-num="1"' : ""}>${esc(c.label)}</button>`}</th>`;
+  const td = (c, r) => { const t = c.t ? c.t(r) : ""; return `<td class="${[c.n ? "n" : "", c.cls ? c.cls(r) : ""].join(" ").trim()}">${c.h ? c.h(r) : esc(t ?? "—")}</td>`; };
+  host.innerHTML = `<table><thead><tr>${vis.map(th).join("")}</tr></thead><tbody>${shown.slice(0, ROW_LIMIT).map(r => `<tr>${vis.map(c => td(c, r)).join("")}</tr>`).join("")}</tbody></table>` +
+    (!shown.length ? `<div class="empty">Nothing matches that search.</div>` : shown.length > ROW_LIMIT ? `<p class="muted small" style="margin:10px">Showing the first ${ROW_LIMIT} of ${shown.length.toLocaleString()}. Search to narrow them down. Export CSV includes them all.</p>` : "");
+  if (focused) { const b = host.querySelector(`[data-sort="${CSS.escape(focused)}"]`); if (b) b.focus(); }
+}
+function csvCell(v) {
+  if (v == null) return "";
+  if (typeof v === "number") return String(v);
+  // Text from Kalshi could start like a spreadsheet formula.
+  const s = /^[=+\-@\t\r]/.test(v = String(v)) ? "'" + v : v;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function exportTable(host, name) {
+  if (!host._view || !host._view.rows.length) return;
+  const cols = host._view.cols.filter(c => !c.noCsv), rows = host._view.rows;
+  const text = [cols.map(c => csvCell(c.label)).join(","), ...rows.map(r => cols.map(c => csvCell((c.csv || c.v || c.t)(r))).join(","))].join("\r\n");
+  const a = document.createElement("a"), file = `${name}-${new Date().toLocaleDateString("en-CA")}.csv`;
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + text], {type: "text/csv;charset=utf-8"})); a.download = file;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Exported ${rows.length.toLocaleString()} rows to ${file}`);
+}
+const marketLink = (t) => `<button type="button" class="linkb" data-market="${esc(t)}" title="Open the chart for ${esc(t)}">${esc(t)}</button>`;
+const FILL_COLS = [
+  {k: "ts", label: "Time", t: f => dt(f.ts), v: f => f.ts, csv: f => new Date(f.ts * 1000).toISOString(), cls: () => "num"},
+  {k: "ticker", label: "Market", t: f => f.ticker, h: f => marketLink(f.ticker), s: f => marketName(f.ticker)},
+  {k: "side", label: "Side", t: f => `${f.action === "buy" ? "Buy" : "Sell"} ${f.side}`, cls: f => f.action === "buy" ? "up" : "down"},
+  {k: "count", label: "Qty", n: 1, t: f => f.count},
+  {k: "price", label: "Price", n: 1, t: f => f.price_cents + "¢", v: f => f.price_cents},
+  {k: "model", label: "Model", n: 1, t: f => f.model_cents == null ? null : f.model_cents.toFixed(1) + "¢", v: f => f.model_cents ?? null, title: "The model's price when the quote went up or the take was made"},
+  {k: "edge", label: "Edge", n: 1, t: f => f.edge_cents == null ? null : sc(f.edge_cents, 1), v: f => f.edge_cents ?? null, title: "How far the fill price was on our side of the model, before fees"},
+  {k: "type", label: "Type", noCsv: 1, t: f => `${f.mode}, ${f.liquidity === "taker" ? "take" : "quote"}${f.strategy ? ", " + f.strategy : ""}`, cls: () => "muted"},
+  {k: "mode", label: "Mode", csvOnly: 1, t: f => f.mode},
+  {k: "liquidity", label: "Liquidity", csvOnly: 1, t: f => f.liquidity || "maker"},
+  {k: "strategy", label: "Strategy", csvOnly: 1, t: f => f.strategy || ""},
+];
+const MARKET_COLS = [
+  {k: "ticker", label: "Market", t: m => m.ticker, h: m => marketLink(m.ticker), s: m => marketName(m.ticker)},
+  {k: "fills", label: "Fills", n: 1, t: m => m.fills},
+  {k: "net", label: "Net", n: 1, t: m => m.net},
+  {k: "avg", label: "Avg cost", n: 1, t: m => m.avg_cost + "¢", v: m => m.avg_cost},
+  {k: "realized", label: "Realized", n: 1, t: m => usd(m.realized_usd, true), v: m => m.realized_usd, csv: m => +m.realized_usd.toFixed(2), cls: m => tone(m.realized_usd)},
+  {k: "open", label: "Open", n: 1, t: m => m.open_usd == null ? (m.net ? "not priced" : "") : usd(m.open_usd, true), v: m => m.open_usd ?? null, csv: m => m.open_usd == null ? null : +m.open_usd.toFixed(2), cls: m => tone(m.open_usd)},
+  {k: "fees", label: "Fees", n: 1, t: m => usd(m.fees_usd), v: m => m.fees_usd, csv: m => +m.fees_usd.toFixed(2)},
+  {k: "note", label: "Note", t: m => m.note || "", cls: () => "muted"},
+];
+// The whole ledger, fetched only while it's on screen and only when it has grown.
+let fillsData = null, fillsTried = 0, fillsLoading = false;
+async function loadFills() {
+  if (fillsLoading || !S || (fillsData && fillsData.length === S.pnl.fill_count) || Date.now() - fillsTried < 5000) return;
+  fillsLoading = true; fillsTried = Date.now();
+  try { fillsData = (await api("GET", "/api/fills", null, 20000)).fills; if (view === "activity") renderLedger(); }
+  catch (e) { /* the latest fills from /api/state still show */ }
+  finally { fillsLoading = false; }
+}
+
 /* ---------- activity ---------- */
 function renderActivity() {
   const p = S.pnl, c = p.equity_curve;
@@ -1331,13 +1596,13 @@ function renderActivity() {
 }
 function renderLedger() {
   document.querySelectorAll("[data-tab]").forEach(t => { const on = t.dataset.tab === ledgerTab; t.classList.toggle("on", on); t.setAttribute("aria-pressed", on); });
-  const p = S.pnl;
+  const p = S.pnl, base = {q: $("ledgerQ").value, count: $("ledgerCount"), csv: $("ledgerCsv")};
   if (ledgerTab === "fills") {
-    $("ledger").innerHTML = p.recent_fills.length ? `<table><thead><tr><th>Time</th><th>Market</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Type</th></tr></thead><tbody>${
-      p.recent_fills.map(f => `<tr><td class="num">${dt(f.ts)}</td><td>${esc(f.ticker)}</td><td class="${f.action === "buy" ? "up" : "down"}">${f.action === "buy" ? "Buy" : "Sell"} ${esc(f.side)}</td><td class="n">${f.count}</td><td class="n">${f.price_cents}¢</td><td class="muted">${esc(f.mode)}, ${f.liquidity === "taker" ? "take" : "quote"}${f.strategy ? ", " + esc(f.strategy) : ""}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No fills recorded yet.</div>`;
+    loadFills();
+    const rows = fillsData || p.recent_fills;
+    drawTable($("ledger"), "fills", FILL_COLS, rows, {...base, sig: `${rows.length}:${rows.length ? rows[0].ts : 0}`, empty: "No fills recorded yet.", noun: fillsData ? "fills" : "latest fills"});
   } else {
-    $("ledger").innerHTML = p.markets.length ? `<table><thead><tr><th>Market</th><th class="n">Fills</th><th class="n">Net</th><th class="n">Avg cost</th><th class="n">Realized</th><th class="n">Open</th><th class="n">Fees</th><th>Note</th></tr></thead><tbody>${
-      p.markets.map(m => `<tr><td>${esc(m.ticker)}</td><td class="n">${m.fills}</td><td class="n">${m.net}</td><td class="n">${m.avg_cost}¢</td><td class="n ${tone(m.realized_usd)}">${usd(m.realized_usd, true)}</td><td class="n ${tone(m.open_usd)}">${m.open_usd == null ? (m.net ? "not priced" : "") : usd(m.open_usd, true)}</td><td class="n">${usd(m.fees_usd)}</td><td class="muted">${esc(m.note)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No markets traded yet.</div>`;
+    drawTable($("ledger"), "bymkt", MARKET_COLS, p.markets, {...base, sig: JSON.stringify(p.markets), empty: "No markets traded yet.", noun: "markets"});
   }
 }
 function renderConsole() {
@@ -1356,15 +1621,24 @@ function renderScanner() {
   const watched = new Set(S ? S.markets.map(m => m.ticker) : []), c = scanData.counts || {};
   $("scanMeta").textContent = scanData.running && !scanData.ts ? "Sweeping…" : `${(scanData.markets_active || 0).toLocaleString()} active markets, ${c["fair-value"] || 0} fair value, ${c.book || 0} spread capture${scanData.ts ? ", " + hm(scanData.ts) : ""}${scanData.running ? ", refreshing" : ""}`;
   const rows = scanData.rows.filter(r => scanTab === "rejected" ? !r.tradeable : r.tradeable && r.strategy === scanTab);
-  if (!rows.length) { $("scanner").innerHTML = `<div class="empty">${scanData.ts ? "Nothing in this list right now." : "Sweeping every open market (about 15 s)…"}</div>`; return; }
-  const fv = scanTab === "fair-value";
-  $("scanner").innerHTML = `<table><thead><tr><th>Market</th><th class="n">24h volume</th><th class="n">Bid</th><th class="n">Ask</th>${fv ? `<th class="n">Model</th><th class="n" title="Best take edge after the taker fee">Take edge</th>` : `<th class="n">Spread</th><th class="n" title="Captured per contract after fees">Edge per contract</th>`}${scanTab === "rejected" ? "<th>Why not</th>" : `<th class="n">Est. $/day</th>`}<th class="n">Closes</th><th></th></tr></thead><tbody>${
-    rows.map(r => `<tr><td>${esc(r.ticker)}<div class="sub">${esc(r.title)}${r.subtitle ? ", " + esc(r.subtitle) : ""}</div></td>
-      <td class="n">${Math.round(r.volume_24h).toLocaleString()}</td><td class="n">${cents(r.yes_bid)}</td><td class="n">${cents(r.yes_ask)}</td>
-      ${fv ? `<td class="n">${r.fv != null ? r.fv + "¢" : "—"}</td><td class="n ${r.fv_edge >= (S ? S.params.take_edge_cents : 4) ? "up" : ""}">${r.fv_edge != null ? r.fv_edge + "¢" : "—"}</td>` : `<td class="n">${cents(r.spread)}</td><td class="n">${r.edge_per_contract != null ? r.edge_per_contract + "¢" : "—"}</td>`}
-      ${scanTab === "rejected" ? `<td class="sub">${esc(r.reasons.join(", "))}</td>` : `<td class="n">$${r.est_edge_day_usd.toFixed(2)}</td>`}
-      <td class="n">${closes(r.hours_to_close)}</td>
-      <td class="n">${watched.has(r.ticker) ? `<span class="sub">Watching</span>` : r.tradeable ? `<button type="button" class="btn sm" data-watch="${esc(r.ticker)}">Watch</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+  const fv = scanTab === "fair-value", takeAt = S ? S.params.take_edge_cents : 4, money = (r, k) => r[k] == null ? null : r[k] + "¢";
+  const cols = [
+    {k: "ticker", label: "Market", t: r => r.ticker, s: r => `${r.title} ${r.subtitle || ""}`, h: r => `${esc(r.ticker)}<div class="sub">${esc(r.title)}${r.subtitle ? ", " + esc(r.subtitle) : ""}</div>`},
+    {k: "title", label: "Title", csvOnly: 1, t: r => r.title}, {k: "subtitle", label: "Subtitle", csvOnly: 1, t: r => r.subtitle || ""},
+    {k: "volume", label: "24h volume", n: 1, t: r => Math.round(r.volume_24h).toLocaleString(), v: r => r.volume_24h},
+    {k: "bid", label: "Bid", n: 1, t: r => money(r, "yes_bid"), v: r => r.yes_bid},
+    {k: "ask", label: "Ask", n: 1, t: r => money(r, "yes_ask"), v: r => r.yes_ask},
+    ...(fv ? [{k: "fv", label: "Model", n: 1, t: r => money(r, "fv"), v: r => r.fv},
+              {k: "edge", label: "Take edge", n: 1, title: "Best take edge after the taker fee", t: r => money(r, "fv_edge"), v: r => r.fv_edge, cls: r => r.fv_edge >= takeAt ? "up" : ""}]
+           : [{k: "spread", label: "Spread", n: 1, t: r => money(r, "spread"), v: r => r.spread},
+              {k: "edge", label: "Edge per contract", n: 1, title: "Captured per contract after fees", t: r => money(r, "edge_per_contract"), v: r => r.edge_per_contract}]),
+    ...(scanTab === "rejected" ? [{k: "why", label: "Why not", t: r => r.reasons.join(", "), cls: () => "sub"}]
+                               : [{k: "day", label: "Est. $/day", n: 1, t: r => "$" + r.est_edge_day_usd.toFixed(2), v: r => r.est_edge_day_usd}]),
+    {k: "closes", label: "Closes", n: 1, t: r => closes(r.hours_to_close), v: r => r.hours_to_close},
+    {k: "watch", label: "", n: 1, noSort: 1, noCsv: 1, h: r => watched.has(r.ticker) ? `<span class="sub">Watching</span>` : r.tradeable ? `<button type="button" class="btn sm" data-watch="${esc(r.ticker)}">Watch</button>` : ""},
+  ];
+  drawTable($("scanner"), "scan:" + scanTab, cols, rows, {q: $("scanQ").value, count: $("scanCount"), csv: $("scanCsv"), noun: "markets",
+    sig: `${scanData.ts}:${[...watched].join()}`, empty: scanData.ts ? "Nothing in this list right now." : "Sweeping every open market (about 15 s)…"});
 }
 function renderArb() {
   if (!arbData) return;
@@ -1374,6 +1648,8 @@ function renderArb() {
     : `<div class="empty"><b>No arbitrage right now.</b><br>Every mutually exclusive event and strike ladder is checked each sweep against live books. Confirmed gaps are logged to arb_log.jsonl and never auto-executed.</div>`;
 }
 async function loadScan(force = false) {
+  clearTimeout(loadScan._t);
+  if (view !== "scanner") return;     // the list can be 1 MB: only while it's on screen (setView starts this again)
   try {
     [scanData, arbData] = await Promise.all([api("GET", "/api/scan" + (force ? "?force=1" : "")), api("GET", "/api/arb")]);
     if (view === "scanner") { renderScanner(); renderArb(); }
@@ -1416,6 +1692,7 @@ function setView(v, ticker = null) {
   if (decodeURIComponent(location.hash.slice(1)) !== hash) history.replaceState(null, "", "#" + hash);
   Object.keys(VIEWS).forEach(k => $("view-" + k).hidden = k !== v);
   if (S) { renderNav(); renderHeader(); renderView(); }
+  if (v === "scanner") loadScan();
   window.scrollTo({top: 0});
 }
 let polling = false;
@@ -1428,16 +1705,29 @@ async function poll() {
     lastOk = Date.now(); pollFails = 0;
   } catch (e) { pollFails++; }
   polling = false;
-  if (state) { S = state; renderNav(); renderHeader(); renderView(); }
+  if (state) { const prev = S; S = state; watchEvents(prev); renderNav(); renderHeader(); renderView(); }
   renderStatus();
 }
 
 $("btnKill").onclick = confirmKill;
 $("dlg").onclick = (e) => { if (e.target === $("dlg")) $("dlg").close(); };   // a click on the backdrop
 $("btnBack").onclick = () => setView(backTo);
-$("btnBell").onclick = () => { setView("activity"); requestAnimationFrame(() => $("logCard").scrollIntoView({block: "start"})); };
+$("btnBell").onclick = () => showAlertMenu($("alertMenu").hidden);
+$("alLog").onclick = () => { showAlertMenu(false); setView("activity"); requestAnimationFrame(() => $("logCard").scrollIntoView({block: "start"})); };
+$("alTest").onclick = () => {
+  if (!al.alDesktop && !al.alSound) { alertNote("Turn on desktop notifications or sound first."); return; }
+  alertNote(""); sendAlert("test", "Test alert", "Alerts from Kalshi Bot Pro are working.", null, true);
+};
+$("alDesktop").onchange = (e) => setDesktopAlerts(e.target.checked);
+for (const id of ["alSound", "alFills", "alHalt", "alConn"]) $(id).onchange = (e) => { al[id] = e.target.checked; alertNote(""); savePrefs(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("alertMenu").hidden) { showAlertMenu(false); $("btnBell").focus(); } });
+document.addEventListener("pointerdown", () => { if (audio && audio.state === "suspended") audio.resume(); });
+$("ledgerQ").oninput = () => renderLedger();
+$("scanQ").oninput = () => renderScanner();
+$("ledgerCsv").onclick = () => exportTable($("ledger"), ledgerTab === "fills" ? "kalshi-fills" : "kalshi-pnl-by-market");
+$("scanCsv").onclick = () => exportTable($("scanner"), "kalshi-scanner-" + scanTab);
 $("btnWSort").onclick = () => { wSort = wSort === "money" ? "movers" : "money"; savePrefs(); renderWatch(); };
-$("dSrc").value = prefs.dSrc; $("dInt").value = prefs.dInt;
+$("dSrc").value = prefs.dSrc; $("dInt").value = prefs.dLen;
 $("dSrc").onchange = $("dInt").onchange = () => { savePrefs(); anim = true; renderView(); };
 $("addForm").onsubmit = (e) => { e.preventDefault(); const t = $("addInput").value.trim(); if (t) act("POST", "/api/tickers", {ticker: t}, `Watching ${t.toUpperCase()}`).then(() => $("addInput").value = ""); };
 $("btnScan").onclick = () => loadScan(true);
@@ -1449,6 +1739,13 @@ $("btnAutopick").onclick = async () => {
 };
 $("autoRotate").onchange = (e) => act("POST", "/api/autorotate", {on: e.target.checked}, e.target.checked ? "Auto-rotate on" : "Auto-rotate off");
 document.addEventListener("click", (e) => {
+  if (!$("alertMenu").hidden && !e.target.closest(".bellwrap")) showAlertMenu(false);
+  const so = e.target.closest("[data-sort]");
+  if (so) {
+    const id = so.closest("[data-tbl]").dataset.tbl, st = tbl(id);
+    if (st.k === so.dataset.sort) st.desc = !st.desc; else { st.k = so.dataset.sort; st.desc = !!so.dataset.num; }
+    savePrefs(); (id === "fills" || id === "bymkt" ? renderLedger : renderScanner)(); return;
+  }
   const nv = e.target.closest("[data-view]"); if (nv) { setView(nv.dataset.view); return; }
   const go = e.target.closest("[data-go]"); if (go) { setView(go.dataset.go); return; }
   const mk = e.target.closest("[data-market]"); if (mk) { setView("market", mk.dataset.market); return; }
@@ -1459,7 +1756,7 @@ document.addEventListener("click", (e) => {
   const hh = e.target.closest("[data-hh]"); if (hh) { hhSel = +hh.dataset.hh; savePrefs(); anim = true; renderView(); return; }
   const tb = e.target.closest("[data-tab]"); if (tb) { ledgerTab = tb.dataset.tab; savePrefs(); renderLedger(); return; }
   const st = e.target.closest(".stab"); if (st) { scanTab = st.dataset.stab; savePrefs(); renderScanner(); return; }
-  const w = e.target.closest("[data-watch]"); if (w) { w.disabled = true; act("POST", "/api/tickers", {ticker: w.dataset.watch}, `Watching ${w.dataset.watch}`).then(renderScanner); return; }
+  const w = e.target.closest("[data-watch]"); if (w) { w.disabled = true; act("POST", "/api/tickers", {ticker: w.dataset.watch}, `Watching ${w.dataset.watch}`).then(() => { $("scanner")._key = ""; renderScanner(); }); return; }
   const rm = e.target.closest("[data-rm]"); if (rm) act("DELETE", "/api/tickers/" + encodeURIComponent(rm.dataset.rm), null, `Removed ${rm.dataset.rm}`);
 });
 window.addEventListener("hashchange", () => { const [v, t] = route(); if (v !== view || t !== detailT) setView(v, t); });
@@ -1467,7 +1764,7 @@ let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTime
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });   // background tabs poll rarely
 
 setView(...route());
-poll(); setInterval(poll, 1500); setInterval(renderStatus, 1000); loadScan(); loadMarkouts();
+poll(); setInterval(poll, 1500); setInterval(renderStatus, 1000); loadMarkouts();
 </script>
 </body>
 </html>

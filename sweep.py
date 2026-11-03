@@ -19,6 +19,8 @@ import scanner
 from config import CONFIG
 from kalshi_client import build_client
 
+MAX_ROWS_PER_STRATEGY = 2500   # about 1 KB each in the dashboard's memory and on the wire
+
 
 def run(client) -> dict:
     t0 = time.time()
@@ -27,9 +29,10 @@ def run(client) -> dict:
     scan = {
         "ts": time.time(), "markets_active": len(rows),
         "counts": {s: sum(1 for r in suitable if r["strategy"] == s) for s in ("fair-value", "book")},
-        # top of each strategy list + the best rejected ones (for "why not")
-        "rows": ([r for r in suitable if r["strategy"] == "fair-value"][:40]
-                 + [r for r in suitable if r["strategy"] == "book"][:40]
+        # every suitable market, so the Scanner's search and export reach them
+        # all, + the best rejected ones (for "why not")
+        "rows": ([r for r in suitable if r["strategy"] == "fair-value"][:MAX_ROWS_PER_STRATEGY]
+                 + [r for r in suitable if r["strategy"] == "book"][:MAX_ROWS_PER_STRATEGY]
                  + [r for r in rows if not r["tradeable"]][:20]),
     }
     found = arb.scan(client)        # reuses the catalog just loaded

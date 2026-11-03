@@ -32,6 +32,7 @@ from flask import Flask, jsonify, request, send_from_directory
 import ledger
 import markouts
 import pnl
+import price_bars
 from config import CONFIG
 from engine import Engine
 from kalshi_client import KalshiClient, build_client, top_of_book
@@ -282,6 +283,29 @@ def scan():
 @app.get("/api/arb")
 def arbitrage():
     return jsonify({**(_sweep["arb"] or {"confirmed": [], "ts": None}), "running": _sweep["running"]})
+
+
+# ---- full fill history and long price charts ---------------------------------
+# Only when asked for, unlike /api/state: read from disk and Kalshi per request,
+# so nothing here grows the bot's memory (price_bars.py). Candles go through the
+# low-priority client, since they share Kalshi's rate limit with trading.
+
+_candles = price_bars.CandleCache()
+
+
+@app.get("/api/fills")
+def all_fills():
+    return jsonify({"fills": ledger.read_all_fills()[::-1]})
+
+
+@app.get("/api/history/<ticker>")
+def price_history(ticker):
+    """One market's chart, from minute `since` on, and all its fills."""
+    if not price_bars.valid_ticker(ticker):
+        return jsonify({"ok": False, "msg": "Not a market ticker"}), 400
+    since = request.args.get("since", 0, type=int)
+    rows = price_bars.rows(_candles.get(SWEEP_CLIENT, ticker), engine.bars.read(ticker, since), since)
+    return jsonify({"rows": rows, "fills": [f for f in ledger.read_all_fills() if f["ticker"] == ticker]})
 
 
 # ---- today's markouts (Edge view) -------------------------------------------
