@@ -334,7 +334,8 @@ td .sub { color: var(--ink-2); font-size: 12px; }
 .sel { min-height: 26px; padding: 0 6px; border: 1px solid rgba(255,255,255,.7); border-radius: 3px; background: var(--app); font-size: 12px; }
 .dtool { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 8px 16px; border-bottom: 1px solid var(--soft); font-size: 12px; color: var(--ink-3); }
 .dtool .sel { border-color: transparent; color: var(--ink-2); }
-.dtool span { display: inline-flex; align-items: center; gap: 6px; }
+.dtool span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+#dToolInfo { flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
 .dbody { padding: 10px 16px 14px; min-height: 360px; }
 .cstats { position: absolute; left: 12px; right: 64px; top: 4px; display: flex; flex-wrap: wrap; gap: 4px 54px; font-size: 12px; pointer-events: none; }
 .cstats div { display: flex; flex-direction: column; }
@@ -955,7 +956,7 @@ function lineChart(el, {series, height = 220, yFmt = (v) => v, xFmt = t2, area =
 
 /* ---------- candlestick chart: the model (or mid) in candles, the market's bid and ask as levels, our fills marked ---------- */
 // One market's long history and all its fills (/api/history), for the chart on screen.
-const HIST_REFRESH_MS = 30000;
+const HIST_REFRESH_MS = 30000, MIN_MODEL_CANDLES = 20;   // the model is only recorded from when the bot watches a market: fewer than this and the market's candles say more
 let dHist = {t: null, rows: [], fills: [], at: 0, loaded: false, err: null, loading: false};
 async function loadHist() {
   const t = detailT;
@@ -985,7 +986,9 @@ function buildCandles(m, src, secs) {
     if (!hist.some(p => p[src] != null)) src = "mid";
     for (const p of hist) if (p[src] != null) put(p.ts, p[src], p[src], p[src], p[src], 0, p.fv != null && p.mid != null ? p.fv - p.mid : null);
   } else {
-    if (!rows.some(r => r[6] != null)) src = "mid";
+    const cut = rows.length ? rows[rows.length - 1][0] - 120 * secs : 0;
+    const modelCandles = new Set(rows.filter(r => r[6] != null && r[0] >= cut).map(r => Math.floor(r[0] / secs))).size;
+    if (modelCandles < MIN_MODEL_CANDLES && rows.some(r => r[1] != null)) src = "mid";
     const at = src === "fv" ? 6 : 1;
     for (const r of rows) if (r[at] != null) put(r[0], r[at], r[at + 1], r[at + 2], r[at + 3], r[5], r[9] != null && r[4] != null ? r[9] - r[4] : null);
   }
@@ -1017,7 +1020,7 @@ function candleChart(el, {cs, src}, book, fills, secs) {
   const every = Math.max(1, Math.round(n / (W < 520 ? 3 : stamp === dt ? 5 : 6)));
   for (let i = 0; i < n; i += every) { const x = X(start + i * secs).toFixed(1); g += `<line x1="${x}" x2="${x}" y1="${P.t - 6}" y2="${H - P.b}" stroke="rgba(110,140,220,.1)" stroke-dasharray="3 4"/><text class="tk" x="${x}" y="${H - 6}" text-anchor="${i === 0 && slot < 40 ? "start" : "middle"}">${esc(stamp(start + i * secs))}</text>`; }
   // Under the candles: the model's gap to the market where there's a model, otherwise volume.
-  const showGap = win.some(c => c.gap), maxStrip = showGap ? Math.max(4, ...win.map(c => Math.abs(c.gap))) : Math.max(1, ...win.map(c => c.vol));   // a 4¢ gap (the usual take threshold) fills the strip
+  const gapped = win.filter(c => c.gap).length, showGap = gapped > 0 && gapped >= Math.min(MIN_MODEL_CANDLES, win.length / 2), maxStrip = showGap ? Math.max(4, ...win.map(c => Math.abs(c.gap))) : Math.max(1, ...win.map(c => c.vol));   // a 4¢ gap (the usual take threshold) fills the strip
   const stripName = showGap ? "Model gap" : win.some(c => c.vol) ? "Volume" : "";
   let body = "";
   for (const c of win) {
@@ -1357,7 +1360,7 @@ function renderMarket() {
   loadHist();
   const src = $("dSrc").value, secs = +$("dInt").value, built = dTab === "performance" ? buildCandles(m, src, secs) : null;
   const legend = dTab === "performance" ? `<span style="color:${C.orange}">&#9650; Bought</span><span style="color:${C.cyan}">&#9660; Sold</span>` : "";
-  const noModel = built && built.cs.length && built.src !== src ? `<span class="late">No model history here, so these are market mid candles</span>` : "";
+  const noModel = built && built.cs.length && built.src !== src ? `<span class="late">Not enough model history yet, showing market mid</span>` : "";
   $("dToolInfo").innerHTML = `<span title="${esc(pl.fv_detail || "")}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/></svg>${pl.fv != null ? "Model" : "No model"}</span><span>Kalshi</span><span>${esc(t)}</span>${legend}${noModel}`;
   const body = $("dBody");
   if (dTab === "performance") {
