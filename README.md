@@ -149,6 +149,7 @@ ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 | `simulate.py` | Monte Carlo of the old vs new rules on resampled real history |
 | `backtest.py` | Minute-by-minute replay of the fair-value strategy on settled BTC daily markets, with markouts |
 | `ledger.py` / `pnl.py` | Fill log and average-cost, settlement-aware P&L |
+| `price_bars.py` | Long price charts: the model's one-minute bars on disk (`price_bars/`), merged with Kalshi's candles when a chart asks |
 | `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429 |
 | `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) and the Kalshi websocket (needs an API key) |
 | `dashboard.py` + `static/index.html` | Local web dashboard: Overview (today, settlement payout), Ladder, Edge (markouts vs history), Activity (ledger, settings, log), Scanner |
