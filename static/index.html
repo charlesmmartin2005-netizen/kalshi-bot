@@ -56,6 +56,12 @@ a { color: var(--blue-2); }
 .runlight { width: 22px; height: 22px; border-radius: 50%; flex: none; border: 2px solid rgba(255,255,255,.85); background: #3b4660; }
 .runlight.run { background: radial-gradient(circle at 35% 30%, #8dffc0, var(--gain) 60%); box-shadow: 0 0 12px rgba(47,210,122,.6); }
 .runlight.halt { background: radial-gradient(circle at 35% 30%, #ffb0b6, var(--loss) 60%); box-shadow: 0 0 12px rgba(255,71,87,.6); }
+.runlight.warn { background: radial-gradient(circle at 35% 30%, #ffe0a6, var(--amber) 60%); box-shadow: 0 0 12px rgba(255,181,71,.6); }
+.runlight.down { background: transparent; border-color: var(--loss); }
+.late { color: var(--amber); }
+.fresh { color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
+.fresh.late { color: var(--amber); } .fresh.down { color: var(--loss); }
+.stale [id^="view-"], .stale #btcPrice { opacity: .5; transition: opacity .2s; }
 
 /* page header */
 .page { max-width: 1260px; margin: 0 auto; padding: 30px 40px 56px; }
@@ -197,6 +203,14 @@ h2, h3 { margin: 0; font-weight: 500; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn.primary { background: linear-gradient(180deg, #3b6cff, #2a4fd8); border-color: #5a86ff; color: #fff; box-shadow: 0 0 18px rgba(60,110,255,.35); }
 .btn.sm { min-height: 32px; padding: 0 11px; font-size: 12.5px; }
+.btn.danger { background: rgba(255,71,87,.14); border-color: rgba(255,71,87,.65); color: #ff9aa3; }
+.dlg { width: min(460px, calc(100vw - 32px)); padding: 0; color: var(--ink); border: 1px solid var(--line-2); border-radius: 6px; background: radial-gradient(130% 90% at 100% 100%, rgba(28,64,200,.2), transparent 62%), var(--card); box-shadow: 0 30px 90px rgba(0,0,0,.8), inset 0 0 40px rgba(36,84,255,.08); }
+.dlg::backdrop { background: rgba(1,4,14,.72); }
+.dlg form { display: flex; flex-direction: column; gap: 14px; padding: 20px 22px; }
+.dlg h2 { font-size: 17px; font-weight: 500; color: #fff; }
+.dlg p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.5; }
+.dlg p:last-child { margin-bottom: 0; }
+.dlg .btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .btn svg { width: 14px; height: 14px; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--raised); cursor: pointer; font-size: 13px; }
 .toggle input { accent-color: var(--blue); width: 16px; height: 16px; margin: 0; }
@@ -372,7 +386,9 @@ td .sub { color: var(--ink-2); font-size: 12px; }
   .word { font-size: 19px; }
   .navr { gap: 6px; }
   .navi.who { display: none; }
-  .vsep { display: none; }
+  .vsep, .tw-lab { display: none; }
+  .fresh { order: 5; }
+  .dlg .btn { min-height: 44px; }
   .tname .muted { display: none; }
   .tab { padding: 0 10px; }
   .page { padding: 18px 16px 40px; }
@@ -437,10 +453,11 @@ td .sub { color: var(--ink-2); font-size: 12px; }
   <div class="phead">
     <div class="ptitle"><button type="button" class="back" id="btnBack" aria-label="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><h1 id="vTitle">My Dashboard</h1><span class="psub" id="vSub"></span></div>
     <div class="pctl">
+      <span class="fresh num" id="fresh">Connecting…</span>
       <button type="button" class="lnk" id="btnRun">Start trading</button>
       <button type="button" class="lnk danger" id="btnKill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><circle cx="12" cy="16.5" r=".6" fill="currentColor"/></svg>Kill switch</button>
       <span class="vsep" aria-hidden="true"></span>
-      <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span class="small">Trading with:</span><span class="box" id="modeBox">Paper money</span></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span class="small tw-lab">Trading with:</span><span class="box" id="modeBox">Paper money</span></span>
     </div>
   </div>
   <div id="banner"></div>
@@ -554,6 +571,13 @@ td .sub { color: var(--ink-2); font-size: 12px; }
 </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog class="dlg" id="dlg" aria-labelledby="dlgTitle" aria-describedby="dlgBody">
+  <form method="dialog">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgBody"></div>
+    <div class="btns"><button class="btn" id="dlgNo" autofocus>Keep trading</button><button class="btn" id="dlgYes"></button></div>
+  </form>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -599,13 +623,29 @@ const SCAN_NOTES = {
 const PERIODS = {days: [[1, "24 H"], [7, "7 D"], [30, "30 D"]], weeks: [[7, "1 W"], [28, "4 W"], [84, "12 W"]], months: [[30, "1 M"], [91, "3 M"], [182, "6 M"]]};
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
+// View settings kept in this browser across reloads. Each list starts with
+// the default; a value that's missing, or no longer on the list, gets it.
+const PREF_CHOICES = {pnlUnit: Object.keys(PERIODS), posSort: ["strike", "n", "value", "open", "alloc"], wSort: ["money", "movers"],
+  hSel: [5, 1, 60], hhSel: [5, 60], ledgerTab: ["fills", "bymkt"], scanTab: ["fair-value", "book", "rejected"], dSrc: ["fv", "mid"], dInt: [5, 10, 15]};
+const PREFS_KEY = "kalshi-bot-view";
+function loadPrefs() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch (e) { /* blocked or corrupt: use the defaults */ }
+  return Object.fromEntries(Object.entries(PREF_CHOICES).map(([k, opts]) => [k, opts.includes(saved[k]) ? saved[k] : opts[0]]));
+}
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({pnlUnit, posSort, wSort, hSel, hhSel, ledgerTab, scanTab, dSrc: $("dSrc").value, dInt: +$("dInt").value})); }
+  catch (e) { /* blocked: settings last until the next reload */ }
+}
+const prefs = loadPrefs();
+
 let S = null, MK = null, scanData = null, arbData = null;
 let view = "overview", detailT = null, backTo = "overview";
-let anim = true, hSel = 5, hhSel = 5, ledgerTab = "fills", scanTab = "fair-value";
-let pnlUnit = "days", posSort = "strike", wSort = "money", dTab = "performance";
+let anim = true, hSel = prefs.hSel, hhSel = prefs.hhSel, ledgerTab = prefs.ledgerTab, scanTab = prefs.scanTab;
+let pnlUnit = prefs.pnlUnit, posSort = prefs.posSort, wSort = prefs.wSort, dTab = "performance";
 
-async function api(method, path, body) {
-  const r = await fetch(path, {method, headers: {"Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined});
+async function api(method, path, body, timeoutMs) {
+  const r = await fetch(path, {method, headers: {"Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined});
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.msg || r.statusText);
   return j;
@@ -659,9 +699,75 @@ function posValue(m) { const px = m.mark != null ? m.mark : m.avg_cost; return (
 function runAction() {
   const r = S.risk;
   if (r.halted) return {label: "Reset kill switch", go: () => act("POST", "/api/reset", null, "Kill switch reset")};
-  if (S.running) return {label: "Stop trading", go: () => act("POST", "/api/stop", null, "Stopped, quotes cancelled")};
+  if (S.running) return {label: "Stop trading", go: confirmStop};
   const off = !S.markets.length && !S.auto_rotate;
   return {label: "Start trading", go: () => act("POST", "/api/start", null, "Bot started"), disabled: off, title: off ? "Add a market or turn on auto-rotate first" : ""};
+}
+
+/* ---------- confirm before stopping ---------- */
+function ask(title, paras, no, yes, danger) {
+  const d = $("dlg");
+  if (d.open) return Promise.resolve(false);
+  $("dlgTitle").textContent = title;
+  $("dlgBody").innerHTML = paras.map(p => `<p class="num">${esc(p)}</p>`).join("");
+  $("dlgNo").textContent = no; $("dlgYes").textContent = yes; $("dlgYes").className = "btn " + (danger ? "danger" : "primary");
+  d.showModal();
+  // Yes acts on the click itself: browsers deliver "close" a frame later, and
+  // only while the page is rendering. Anything else that closes it is a no.
+  return new Promise(res => {
+    $("dlgYes").onclick = () => res(true);
+    d.onclose = () => { if (!d.open) res(false); };
+  });
+}
+function stopEffects(lead) {
+  const nq = S.markets.reduce((s, m) => s + m.quotes.length, 0), n = openPositions().length;
+  return [lead + (nq === 0 ? ". No quotes are resting right now." : nq === 1 ? " and cancels the 1 resting quote." : ` and cancels all ${nq} resting quotes.`),
+    n ? `${n} open position${n === 1 ? " stays" : "s stay"} open. Nothing works ${n === 1 ? "it" : "them"} down before settlement while the bot is stopped.` : "There are no open positions."];
+}
+async function confirmStop() {
+  const go = await ask("Stop trading?", [...stopEffects("This stops new orders"),
+    "Trading starts again by itself when the service restarts, such as after a deploy. To keep it stopped through a restart, use the kill switch."],
+    "Keep trading", "Stop trading", false);
+  if (go) act("POST", "/api/stop", null, "Stopped, quotes cancelled");
+}
+async function confirmKill() {
+  const go = await ask("Engage the kill switch?", [...stopEffects("This halts the bot"), "It stays halted, even through a restart, until you reset it."],
+    S.running ? "Keep trading" : "Cancel", "Engage kill switch", true);
+  if (go) act("POST", "/api/kill", null, "Kill switch engaged");
+}
+
+/* ---------- status: what the page can vouch for right now ---------- */
+// The running flag can't say on its own: it stays true if the trading loop
+// stalls, and the last numbers stay on screen if the tunnel or server drops.
+const FAILS_TO_DOWN = 2, LATE_SECONDS = 5, STALL_SECONDS = 20, STATE_TIMEOUT_MS = 8000;   // the loop runs at least every second
+const TITLE = document.title;
+let lastOk = 0, pollFails = 0, bannerHtml = "";
+function health() {
+  if (pollFails >= FAILS_TO_DOWN) return {k: "down", label: "No connection"};
+  if (!S) return {k: "", label: "Connecting"};
+  if (S.risk.halted) return {k: "halt", label: "Halted"};
+  if (!S.running) return {k: "", label: "Stopped"};
+  const since = Math.max(S.last_cycle_at || 0, S.started_at || 0);
+  return S.server_time - since > STALL_SECONDS ? {k: "warn", label: "Stalled", since} : {k: "run", label: "Running"};
+}
+function renderStatus() {
+  const h = health(), down = h.k === "down", age = lastOk ? (Date.now() - lastOk) / 1000 : null, late = age != null && age >= LATE_SECONDS;
+  const light = $("runLight"), fresh = $("fresh");
+  light.className = "runlight " + h.k; light.title = h.label; light.ariaLabel = "Bot: " + h.label.toLowerCase();
+  fresh.textContent = age == null ? (down ? "No data yet" : "Connecting…") : down ? `No data for ${dur(age)}` : late ? `Updated ${dur(age)} ago` : "Updated just now";
+  fresh.className = "fresh num" + (down ? " down" : late ? " late" : "");
+  fresh.title = lastOk ? `Last update ${t2(lastOk / 1000)}` : "";
+  document.body.classList.toggle("stale", down && !!S);
+  // A bad state goes first, so it still shows in a narrow browser tab.
+  const pnl = S && !down ? usd(todayPnl(), true) : "";
+  const title = !S && !down ? TITLE : `${h.k === "run" ? `${pnl} ${h.label}` : `${h.label} ${pnl}`.trim()} - ${TITLE}`;
+  if (document.title !== title) document.title = title;
+  const conn = down ? `<div class="banner" role="alert"><b>Can't reach the bot.</b> ${lastOk ? `These numbers are from ${t2(lastOk / 1000)}.` : "No numbers yet."} Retrying every 1.5 s. If it doesn't come back, run server-dashboard.ps1 to reopen the SSH tunnel, then check the server.</div>`
+    : h.k === "warn" ? `<div class="banner warn" role="alert"><b>The trading loop has stalled.</b> It last ran at ${t2(h.since)}, so resting quotes aren't being updated. Check the logs on the server, or use the kill switch to cancel them.</div>` : "";
+  const live = S && S.mode === "LIVE" ? `<div class="banner warn">Live mode: real orders, real money. The order endpoint schema is unverified, so test with quote_size = 1.</div>` : "";
+  const halt = S && S.risk.halted ? `<div class="banner"><b>Kill switch tripped.</b> ${esc(S.risk.halt_reason)}. Reset it at the top right to trade again.</div>` : "";
+  const html = conn + live + halt;
+  if (html !== bannerHtml) $("banner").innerHTML = bannerHtml = html;
 }
 
 /* ---------- small SVG pieces ---------- */
@@ -792,8 +898,6 @@ function renderNav() {
   const warn = S.logs.filter(l => l.level !== "INFO").length;
   $("bellDot").hidden = !warn && !r.halted; $("bellDot").className = "bdot" + (r.halted || S.logs.some(l => /ERROR|CRITICAL/.test(l.level)) ? " crit" : "");
   $("btnBell").title = $("btnBell").ariaLabel = warn ? `Log: ${warn} warning${warn === 1 ? "" : "s"} in the last ${S.logs.length} lines` : "Log: no warnings";
-  const st = r.halted ? ["halt", "Halted"] : S.running ? ["run", "Running"] : ["", "Stopped"];
-  $("runLight").className = "runlight " + st[0]; $("runLight").title = st[1]; $("runLight").ariaLabel = "Bot " + st[1].toLowerCase();
 }
 function renderHeader() {
   const [title, sub] = VIEWS[view];
@@ -804,9 +908,6 @@ function renderHeader() {
   run.textContent = a.label; run.onclick = a.go; run.disabled = !!a.disabled; run.title = a.title || "";
   $("btnKill").disabled = S.risk.halted;
   $("modeBox").textContent = S.mode === "LIVE" ? "Real money" : "Paper money";
-  const live = S.mode === "LIVE" ? `<div class="banner warn">Live mode: real orders, real money. The order endpoint schema is unverified, so test with quote_size = 1.</div>` : "";
-  const halt = S.risk.halted ? `<div class="banner"><b>Kill switch tripped.</b> ${esc(S.risk.halt_reason)}. Reset it at the top right to trade again.</div>` : "";
-  $("banner").innerHTML = live + halt;
 }
 
 /* ---------- overview ---------- */
@@ -871,7 +972,7 @@ function renderBots(ev) {
   const r = S.risk, a = runAction(), pw = $("btnPower");
   pw.onclick = a.go; pw.disabled = !!a.disabled; pw.title = pw.ariaLabel = a.label;
   const nq = S.markets.reduce((s, m) => s + m.quotes.length, 0), today = todayPnl();
-  const state = r.halted ? `<span class="down">Halted</span>` : S.running ? `<span class="up">Running${S.started_at ? " " + dur(S.server_time - S.started_at) : ""}</span>` : `<span class="muted">Stopped</span>`;
+  const state = r.halted ? `<span class="down">Halted</span>` : health().k === "warn" ? `<span class="late">Stalled</span>` : S.running ? `<span class="up">Running${S.started_at ? " " + dur(S.server_time - S.started_at) : ""}</span>` : `<span class="muted">Stopped</span>`;
   const f = S.feeds || {}, ex = Object.entries(f.exchanges || {}).filter(([n]) => n !== "kalshi"), liveF = ex.filter(([, s]) => s.connected && s.age != null && s.age < 10).length;
   const ro = S.markets.filter(m => m.reduce_only).length, budget = Math.max(0, r.max_daily_loss_usd - Math.max(0, -r.daily_pnl_usd));
   let win = "";
@@ -1320,19 +1421,24 @@ function setView(v, ticker = null) {
 let polling = false;
 async function poll() {
   if (polling) return; polling = true;
+  let state = null;
   try {
-    S = await api("GET", "/api/state");
-    renderNav(); renderHeader(); renderView();
-  } catch (e) {
-    $("banner").innerHTML = `<div class="banner"><b>Dashboard disconnected.</b> Retrying every 1.5 s.</div>`;
-  } finally { polling = false; }
+    state = await api("GET", "/api/state", null, STATE_TIMEOUT_MS);
+    if (!state.risk) { state = null; throw new Error("response cut off"); }
+    lastOk = Date.now(); pollFails = 0;
+  } catch (e) { pollFails++; }
+  polling = false;
+  if (state) { S = state; renderNav(); renderHeader(); renderView(); }
+  renderStatus();
 }
 
-$("btnKill").onclick = () => { if (confirm("Halt the bot and cancel every resting quote?")) act("POST", "/api/kill", null, "Kill switch engaged"); };
+$("btnKill").onclick = confirmKill;
+$("dlg").onclick = (e) => { if (e.target === $("dlg")) $("dlg").close(); };   // a click on the backdrop
 $("btnBack").onclick = () => setView(backTo);
 $("btnBell").onclick = () => { setView("activity"); requestAnimationFrame(() => $("logCard").scrollIntoView({block: "start"})); };
-$("btnWSort").onclick = () => { wSort = wSort === "money" ? "movers" : "money"; renderWatch(); };
-$("dSrc").onchange = $("dInt").onchange = () => { anim = true; renderView(); };
+$("btnWSort").onclick = () => { wSort = wSort === "money" ? "movers" : "money"; savePrefs(); renderWatch(); };
+$("dSrc").value = prefs.dSrc; $("dInt").value = prefs.dInt;
+$("dSrc").onchange = $("dInt").onchange = () => { savePrefs(); anim = true; renderView(); };
 $("addForm").onsubmit = (e) => { e.preventDefault(); const t = $("addInput").value.trim(); if (t) act("POST", "/api/tickers", {ticker: t}, `Watching ${t.toUpperCase()}`).then(() => $("addInput").value = ""); };
 $("btnScan").onclick = () => loadScan(true);
 $("btnAutopick").onclick = async () => {
@@ -1346,21 +1452,22 @@ document.addEventListener("click", (e) => {
   const nv = e.target.closest("[data-view]"); if (nv) { setView(nv.dataset.view); return; }
   const go = e.target.closest("[data-go]"); if (go) { setView(go.dataset.go); return; }
   const mk = e.target.closest("[data-market]"); if (mk) { setView("market", mk.dataset.market); return; }
-  const u = e.target.closest("[data-unit]"); if (u) { pnlUnit = u.dataset.unit; anim = true; renderView(); return; }
-  const ps = e.target.closest("[data-psort]"); if (ps) { posSort = ps.dataset.psort; renderPositions(true); return; }
+  const u = e.target.closest("[data-unit]"); if (u) { pnlUnit = u.dataset.unit; savePrefs(); anim = true; renderView(); return; }
+  const ps = e.target.closest("[data-psort]"); if (ps) { posSort = ps.dataset.psort; savePrefs(); renderPositions(true); return; }
   const dtb = e.target.closest("[data-dtab]"); if (dtb) { dTab = dtb.dataset.dtab; anim = true; renderView(); return; }
-  const h = e.target.closest("[data-h]"); if (h) { hSel = +h.dataset.h; anim = true; renderView(); return; }
-  const hh = e.target.closest("[data-hh]"); if (hh) { hhSel = +hh.dataset.hh; anim = true; renderView(); return; }
-  const tb = e.target.closest("[data-tab]"); if (tb) { ledgerTab = tb.dataset.tab; renderLedger(); return; }
-  const st = e.target.closest(".stab"); if (st) { scanTab = st.dataset.stab; renderScanner(); return; }
+  const h = e.target.closest("[data-h]"); if (h) { hSel = +h.dataset.h; savePrefs(); anim = true; renderView(); return; }
+  const hh = e.target.closest("[data-hh]"); if (hh) { hhSel = +hh.dataset.hh; savePrefs(); anim = true; renderView(); return; }
+  const tb = e.target.closest("[data-tab]"); if (tb) { ledgerTab = tb.dataset.tab; savePrefs(); renderLedger(); return; }
+  const st = e.target.closest(".stab"); if (st) { scanTab = st.dataset.stab; savePrefs(); renderScanner(); return; }
   const w = e.target.closest("[data-watch]"); if (w) { w.disabled = true; act("POST", "/api/tickers", {ticker: w.dataset.watch}, `Watching ${w.dataset.watch}`).then(renderScanner); return; }
   const rm = e.target.closest("[data-rm]"); if (rm) act("DELETE", "/api/tickers/" + encodeURIComponent(rm.dataset.rm), null, `Removed ${rm.dataset.rm}`);
 });
 window.addEventListener("hashchange", () => { const [v, t] = route(); if (v !== view || t !== detailT) setView(v, t); });
 let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => S && renderView(), 150); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });   // background tabs poll rarely
 
 setView(...route());
-poll(); setInterval(poll, 1500); loadScan(); loadMarkouts();
+poll(); setInterval(poll, 1500); setInterval(renderStatus, 1000); loadScan(); loadMarkouts();
 </script>
 </body>
 </html>
