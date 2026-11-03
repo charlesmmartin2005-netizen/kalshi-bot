@@ -58,6 +58,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .crt.sw.sa { animation: swA .24s steps(4); } .crt.sw.sb { animation: swB .24s steps(4); }
 @keyframes swA { 0% { opacity: .7; transform: translateY(-6%); } 50% { opacity: .35; transform: translateY(3%); } 100% { opacity: 0; transform: none; } }
 @keyframes swB { 0% { opacity: .7; transform: translateY(-6%); } 50% { opacity: .35; transform: translateY(3%); } 100% { opacity: 0; transform: none; } }
+.nograin .crt.l, .nograin .crt.b, .nograin .crt.sw { display: none; }
 
 /* outlined text */
 .ol { color: #fff; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 -2px 0 #000, 0 2px 0 #000, -2px 0 0 #000, 2px 0 0 #000, 3px 3px 0 rgba(0,0,0,.55), 3px 0 0 rgba(255,0,90,.5), -3px 0 0 rgba(0,210,255,.5); }
@@ -480,6 +481,7 @@ td .sub, .sub { color: var(--ink-2); font-size: 12.5px; }
 .exit:hover { filter: brightness(1.2); } .exit:active { transform: translate(1px, 1px); }
 .exit svg { width: 36px; height: 36px; }
 .skins { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grainset { align-self: flex-start; }
 .skt { min-height: 84px; padding: 6px; border: 3px solid #000; color: #fff; font: 800 17px var(--sans); box-shadow: 0 0 0 2px transparent; transition: transform .08s steps(2); }
 .skt small { display: block; font-size: 13px; font-weight: 700; }
 .skt:hover { transform: scale(1.04); } .skt.on { box-shadow: 0 0 0 3px var(--money); }
@@ -775,7 +777,7 @@ td .sub, .sub { color: var(--ink-2); font-size: 12.5px; }
   </form>
 </dialog>
 <dialog class="dlg pad" id="rulesDlg" aria-labelledby="rulesTitle"><form method="dialog"><h2 class="ol" id="rulesTitle">What the bot is doing</h2><div class="stack" id="rulesBody" style="gap:12px"></div><button class="exit" aria-label="Close"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 4H19V10H15V8H8V24H15V22H19V28H4Z" fill="#fff" stroke="#000" stroke-width="1.5"/><path d="M13 13H22V8L30 16L22 24V19H13Z" fill="#fff" stroke="#000" stroke-width="1.5"/></svg></button></form></dialog>
-<dialog class="dlg pad" id="skinDlg" aria-labelledby="skinTitle"><form method="dialog"><h2 class="ol" id="skinTitle">Skins</h2><div class="skins" id="skinGrid"></div><button class="exit" aria-label="Close"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 4H19V10H15V8H8V24H15V22H19V28H4Z" fill="#fff" stroke="#000" stroke-width="1.5"/><path d="M13 13H22V8L30 16L22 24V19H13Z" fill="#fff" stroke="#000" stroke-width="1.5"/></svg></button></form></dialog>
+<dialog class="dlg pad" id="skinDlg" aria-labelledby="skinTitle"><form method="dialog"><h2 class="ol" id="skinTitle">Skins</h2><div class="skins" id="skinGrid"></div><label class="toggle grainset" title="Scanlines, flicker and the rolling band"><input type="checkbox" id="grainOn"> Screen grain</label><button class="exit" aria-label="Close"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 4H19V10H15V8H8V24H15V22H19V28H4Z" fill="#fff" stroke="#000" stroke-width="1.5"/><path d="M13 13H22V8L30 16L22 24V19H13Z" fill="#fff" stroke="#000" stroke-width="1.5"/></svg></button></form></dialog>
 <div class="crt l" aria-hidden="true"></div><div class="crt b" aria-hidden="true"></div><div class="crt v" aria-hidden="true"></div><div class="crt c" aria-hidden="true"></div><div class="crt sw" id="crtSw" aria-hidden="true"></div>
 
 <script>
@@ -839,7 +841,7 @@ const SKINS = {
 // the default; a value that's missing, or no longer on the list, gets it.
 const PREF_CHOICES = {pnlUnit: Object.keys(PERIODS), posSort: ["strike", "n", "value", "open", "alloc"], wSort: ["money", "movers"],
   hSel: [5, 1, 60], hhSel: [5, 60], ledgerTab: ["fills", "bymkt"], scanTab: ["fair-value", "book", "rejected"], dSrc: ["fv", "mid"], dLen: [60, 5, 10, 15, 300, 900, 3600],
-  alDesktop: [false, true], alSound: [false, true], alFills: [true, false], alHalt: [true, false], alConn: [true, false], skin: Object.keys(SKINS), heroDrawer: [true, false]};
+  alDesktop: [false, true], alSound: [false, true], alFills: [true, false], alHalt: [true, false], alConn: [true, false], skin: Object.keys(SKINS), heroDrawer: [true, false], grain: [true, false]};
 const PREFS_KEY = "kalshi-bot-view";
 function loadPrefs() {
   let saved = {};
@@ -847,7 +849,7 @@ function loadPrefs() {
   return Object.fromEntries(Object.entries(PREF_CHOICES).map(([k, opts]) => [k, opts.includes(saved[k]) ? saved[k] : opts[0]]));
 }
 function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({pnlUnit, posSort, wSort, hSel, hhSel, ledgerTab, scanTab, dSrc: $("dSrc").value, dLen: +$("dInt").value, skin, heroDrawer, mins, ...al,
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({pnlUnit, posSort, wSort, hSel, hhSel, ledgerTab, scanTab, dSrc: $("dSrc").value, dLen: +$("dInt").value, skin, grain, heroDrawer, mins, ...al,
     sorts: {...savedSorts, ...Object.fromEntries(Object.entries(tables).map(([id, st]) => [id, {k: st.k, desc: st.desc}]))}})); }
   catch (e) { /* blocked: settings last until the next reload */ }
 }
@@ -857,7 +859,7 @@ const al = {alDesktop: prefs.alDesktop, alSound: prefs.alSound, alFills: prefs.a
 const tables = {};
 let savedSorts = {};
 try { savedSorts = JSON.parse(localStorage.getItem(PREFS_KEY)).sorts || {}; } catch (e) { /* none saved yet */ }
-let skin = prefs.skin, mins = [];
+let skin = prefs.skin, grain = prefs.grain, mins = [];
 try { mins = JSON.parse(localStorage.getItem(PREFS_KEY)).mins || []; } catch (e) { /* none saved yet */ }
 
 let S = null, MK = null, scanData = null, arbData = null;
@@ -1928,6 +1930,7 @@ function startBg() {
   };
   requestAnimationFrame(frame);
 }
+function applyGrain() { document.body.classList.toggle("nograin", !grain); $("grainOn").checked = grain; }
 function flip() { const c = $("crtSw"); c.className = "crt sw " + (c.classList.contains("sa") ? "sb" : "sa"); }
 function renderSkins() {
   $("skinGrid").innerHTML = Object.entries(SKINS).map(([id, s]) => `<button type="button" class="skt ol${id === skin ? " on" : ""}" data-skin="${id}" aria-pressed="${id === skin}" style="background:${s.bg ? `radial-gradient(${s.bg[3]},${s.bg[1]})` : s.tile}">${s.label}<small>${s.kind}</small></button>`).join("");
@@ -2147,6 +2150,7 @@ $("btnKill").onclick = $("hKill").onclick = confirmKill;
 for (const id of ["dlg", "rulesDlg", "skinDlg"]) $(id).onclick = (e) => { if (e.target === $(id)) $(id).close(); };   // a click on the backdrop
 $("btnRules").onclick = () => { if (S) { renderRules(); $("rulesDlg").showModal(); } };
 $("btnSkins").onclick = () => { renderSkins(); $("skinDlg").showModal(); };
+$("grainOn").onchange = (e) => { grain = e.target.checked; applyGrain(); savePrefs(); };
 $("hPrev").onclick = () => stepHero(1);
 $("hNext").onclick = () => stepHero(-1);
 $("hOpen").onclick = () => { if (heroT) setView("market", heroT); };
@@ -2208,6 +2212,7 @@ let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTime
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });   // background tabs poll rarely
 
 applySkin(skin);
+applyGrain();
 startBg();
 setView(...route());
 poll(); setInterval(poll, 1500); setInterval(renderStatus, 1000); loadMarkouts();
