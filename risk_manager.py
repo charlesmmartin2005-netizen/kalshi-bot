@@ -69,7 +69,9 @@ class RiskManager:
 
         if not self.halted and self.daily_pnl_usd <= -self.cfg.max_daily_loss_usd:
             self._halt(f"Daily loss limit hit: ${self.daily_pnl_usd:.2f}")
-        for t in self.positions:
+        for t, pos in self.positions.items():
+            if pos.settled:
+                continue                   # nothing left to reduce
             pnl = self.market_pnl_usd(t)
             if pnl <= -self.cfg.max_single_market_loss_usd and t not in self.reduce_only:
                 self.reduce_only[t] = f"market loss ${pnl:.2f}"
@@ -92,6 +94,23 @@ class RiskManager:
             if ml.net_contracts and not is_settled(t):
                 self.positions[t] = ml
         return {t: ml.net_contracts for t, ml in self.positions.items() if ml.net_contracts}
+
+    def settle(self, ticker: str, price_cents: int, result: str) -> int:
+        """A finalized market's position is over: book what it paid as realized
+        and forget its limits. The ledger stays in self.positions because
+        session and daily P&L are sums over it: dropping it would erase the
+        market's whole P&L from them, so a win would read as a loss the daily
+        limit can trip on and a loss would vanish. Daily P&L moves only by the
+        gap from the last mark to the payout. Returns the net contracts
+        cleared (0 if already flat)."""
+        net = self.net(ticker)
+        if net:
+            pos = self.positions[ticker]
+            pos.settle(price_cents, result)
+            self.reduce_only.pop(ticker, None)
+            log.info("%s %s: cleared position %d, market P&L $%.2f", ticker, pos.settlement_note, net,
+                     self.market_pnl_usd(ticker))
+        return net
 
     def record_api_error(self, consecutive_errors: int):
         if consecutive_errors >= self.cfg.max_consecutive_errors:

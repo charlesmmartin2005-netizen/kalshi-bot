@@ -15,7 +15,7 @@ trade tape and recorded in `fills_log.jsonl`.
 
 Since 2026-10-20 the fair-value strategy runs as **rolling ladder + delta
 lean** (backtest and comparison in `research/README.md`):
-- **Rolling ladder:** auto-pick watches the 6 BTC strikes nearest the money. Auto-rotate (on by default) re-centres them every 15 minutes. A market rolled off with a position goes reduce-only until it's flat.
+- **Rolling ladder:** auto-pick watches the 6 BTC strikes nearest the money. Auto-rotate (on by default) re-centres them every 15 minutes. A market rolled off with a position goes reduce-only until it's flat or settles. Within a minute of a market finalizing, its position is booked at the settlement price and the market leaves the watchlist.
 - **Size:** 15-contract quotes and takes, up to 75 per market, $450 total exposure.
 - **Delta lean:** the bot sums the dollars its whole book gains or loses per 1% coin move, and leans *resting quotes* (not takes) against it, by up to 4¢ at $30/1%.
 

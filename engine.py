@@ -37,6 +37,7 @@ PRICE_HISTORY_POINTS = 180   # per ticker
 HISTORY_EVERY_SECONDS = 1.0  # one chart point per second (~3 minutes shown)
 LOG_LINES = 300
 ROTATE_SECONDS = 900         # auto-rotate re-centres the strikes this often (strategy: rolling ladder)
+SETTLE_CHECK_SECONDS = 60.0  # how often positions past their close are checked for settlement
 ROLLED_OFF = "rolled off — working position down"
 NOTHING_TO_TRADE = (f"Nothing to trade right now: today's BTC markets are in their last "
                     f"{CRYPTO_MIN_HOURS_TO_TRADE:g} hours and tomorrow's open at 4pm ET (3pm CT). With "
@@ -92,6 +93,12 @@ class Engine:
     def __init__(self, config: BotConfig = CONFIG):
         self.cfg = config
         self.client = build_client(config)
+        # Settlement checks are background work: they only take rate-limit
+        # slots trading leaves free, and their errors don't count toward the
+        # kill switch.
+        self.settle_client = build_client(config)
+        self.settle_client.low_priority = True
+        self._last_settle_check = 0.0
         self.risk = RiskManager(config.risk)
         self.maker = MarketMaker(self.client, self.risk, config)
 
@@ -334,6 +341,38 @@ class Engine:
             except Exception as e:
                 log.error("Auto-rotate failed: %s", e)
 
+    def _past_close(self, ticker) -> bool:
+        close = self.market_info.get(ticker, {}).get("close_time")
+        return not close or datetime.fromisoformat(close.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+
+    def _maybe_clear_settled(self):
+        """Every SETTLE_CHECK_SECONDS, close out positions in markets that have
+        settled. restore() does this too, but only at startup: on 2026-11-02 a
+        bot up 119h still held four Oct 30 markets. They stayed on the watchlist
+        reduce-only for good, as $48 of exposure against nothing, with the
+        dashboard showing their event instead of the one being traded. A strike
+        at the money just before close would also leave a delta of 1.0 per
+        contract in the lean and the take cap. Only positions past their close
+        are asked about, on the pool so a slow answer can't hold up this loop."""
+        if time.time() - self._last_settle_check < SETTLE_CHECK_SECONDS:
+            return
+        self._last_settle_check = time.time()
+        with self.lock:
+            closed = [t for t, pos in self.risk.positions.items() if pos.net_contracts and self._past_close(t)]
+        if closed:
+            self._pool.submit(self._clear_settled, closed)
+
+    def _clear_settled(self, tickers):
+        try:
+            # One request per market until it's finalized, then none: cached.
+            checks = {t: pnl.check_settlement(self.settle_client, t) for t in tickers}
+            with self.lock:
+                for t, (final, price, result) in checks.items():
+                    if final and self.risk.settle(t, price, result):
+                        self.remove_ticker(t)
+        except Exception as e:
+            log.exception("Clearing settled positions failed: %s", e)
+
     def remove_ticker(self, ticker: str) -> tuple[bool, str]:
         with self.lock:
             if ticker not in self.cfg.watched_tickers:
@@ -384,6 +423,7 @@ class Engine:
         last_trades = last_depth = 0.0
         while not self._stop.is_set():
             t0 = time.time()
+            self._maybe_clear_settled()
             self._maybe_rotate()
             with self.lock:
                 tickers = list(self.cfg.watched_tickers)
@@ -499,6 +539,11 @@ class Engine:
                 version = book.get("version", book.get("ts"))
                 fresh_for_take = self._take_version.get(ticker) != version
                 with self.lock:
+                    # Removed since this cycle listed it (auto-pick, or it
+                    # settled): evaluating it would bring back its delta and
+                    # rest quotes nothing would ever pull.
+                    if ticker not in self.cfg.watched_tickers:
+                        continue
                     self.maker.evaluate_market(ticker, self.market_info[ticker], book, allow_takes=fresh_for_take)
                     if self.maker.last_plan.get(ticker, {}).get("takes"):
                         self._take_version[ticker] = version
