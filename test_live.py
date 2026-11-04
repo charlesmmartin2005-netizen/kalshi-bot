@@ -595,6 +595,7 @@ class EngineLiveCase(LiveCase):
                                     watched_tickers=[]))
         e.auto_rotate = False
         e._pool = InlinePool()
+        e.maker.budget = WriteBudget(rate=1_000_000)   # WriteBudgetTests has the real one
         return e
 
     def ready(self, e):
@@ -1095,6 +1096,144 @@ class ExchangeFundsTests(EngineLiveCase):
         self.assertEqual(e.snapshot()["live"]["account"]["spendable_usd"], 0)
 
 
+class ExchangeClosedTests(EngineLiveCase):
+    """Kalshi closes Thursdays 3-5am. With no plan for that, the bot would fail 5
+    orders and halt until someone reset it by hand, every week."""
+
+    def trading(self):
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.assertEqual(len(self.ex.resting(T)), 2)
+        return e
+
+    def tick(self, e):
+        e._last_balance = 0
+        e._live_tick()
+
+    def test_it_notices_and_stops_sending_orders(self):
+        e = self.trading()
+        self.ex.close()
+        self.tick(e)
+        self.ex.requests.clear()
+        self.price_model(70.0)                 # a take it would otherwise send
+        e.run_cycle()
+        self.assertEqual([r for r in self.ex.writes() if r[0] == "POST"], [])
+        self.assertIn("closed", e.last_error)
+        self.assertFalse(e.risk.halted)
+
+    def test_it_stops_tracking_quotes_while_closed(self):
+        e = self.trading()
+        self.ex.close()
+        self.tick(e)
+        e.run_cycle()
+        self.assertEqual(e.maker.resting_quotes[T], [])
+
+    def test_it_trades_again_by_itself_when_it_reopens(self):
+        e = self.trading()
+        self.ex.close()
+        self.tick(e)
+        e.run_cycle()
+        self.ex.reopen()
+        self.tick(e)
+        e.run_cycle()
+        self.assertEqual(len(self.ex.resting(T)), 2)
+        self.assertIsNone(e.last_error)
+
+    def test_orders_failing_because_it_just_closed_dont_halt_the_bot(self):
+        # It can close between two status checks, with a burst of orders in between.
+        e = self.trading()
+        self.ex.close()
+        e.maker.resting_quotes[T] = []
+        for _ in range(4):
+            e.maker._place(T, "buy", 30, 2, "fair-value", False)
+            e.maker._place(T, "sell", 70, 2, "fair-value", False)
+        self.assertFalse(e.risk.halted)
+        self.assertFalse(e.exchange_open)
+
+    def test_failures_from_a_closure_dont_count_after_it_reopens(self):
+        e = self.trading()
+        self.ex.close()
+        e.maker.resting_quotes[T] = []
+        for _ in range(5):
+            e.maker._place(T, "buy", 30, 2, "fair-value", False)
+        self.ex.reopen()
+        self.ex.order_failures.append(500)     # one ordinary failure, nowhere near 5 in a row
+        e.maker._place(T, "buy", 30, 2, "fair-value", False)
+        self.assertFalse(e.risk.halted)
+
+    def test_the_closed_message_clears_even_with_nothing_being_watched(self):
+        # Between 2pm and 4pm ET there are no markets to pick.
+        e = self.ready(self.make_engine())
+        self.ex.close()
+        self.tick(e)
+        e.run_cycle()
+        self.assertIn("closed", e.last_error)
+        self.ex.reopen()
+        self.tick(e)
+        e.run_cycle()
+        self.assertIsNone(e.last_error)
+
+    def test_orders_failing_while_it_is_open_still_halt_the_bot(self):
+        e = self.trading()
+        self.ex.order_failures.extend([500] * 5)
+        e.maker.resting_quotes[T] = []
+        for _ in range(3):
+            e.maker._place(T, "buy", 30, 2, "fair-value", False)
+            e.maker._place(T, "sell", 70, 2, "fair-value", False)
+        self.assertTrue(e.risk.halted)
+
+    def test_failing_orders_halt_if_it_cant_tell_whether_it_is_closed(self):
+        e = self.trading()
+        self.ex.order_failures.extend([500] * 5)
+        self.ex.read_failures["/exchange/status"] = requests.ConnectionError("down")
+        e.maker.resting_quotes[T] = []
+        for _ in range(3):
+            e.maker._place(T, "buy", 30, 2, "fair-value", False)
+            e.maker._place(T, "sell", 70, 2, "fair-value", False)
+        self.assertTrue(e.risk.halted)
+
+    def test_only_the_markets_own_exchange_matters(self):
+        e = self.trading()
+        self.ex.close(exchange=0)
+        self.tick(e)
+        self.assertTrue(e.exchange_open)
+        self.ex.close(exchange=2)
+        self.tick(e)
+        self.assertFalse(e.exchange_open)
+
+    def test_position_checks_failing_while_closed_dont_halt_the_bot(self):
+        # Kalshi's account reads may be down during maintenance too.
+        e = self.trading()
+        self.ex.close()
+        self.ex.read_failures["/portfolio/positions"] = requests.ConnectionError("down")
+        self.ex.read_failures["/portfolio/orders"] = requests.ConnectionError("down")
+        for _ in range(7):
+            self.tick(e)
+            self.check_positions(e)
+        self.assertFalse(e.risk.halted)
+
+    def test_a_failed_status_read_changes_nothing(self):
+        e = self.trading()
+        self.ex.read_failures["/exchange/status"] = requests.ConnectionError("down")
+        self.tick(e)
+        self.assertTrue(e.exchange_open)
+
+    def test_starting_while_closed_works_and_waits(self):
+        self.ex.close()
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.assertEqual(self.ex.writes(), [])
+        self.assertFalse(e.risk.halted)
+
+    def test_the_dashboard_state_shows_it(self):
+        e = self.trading()
+        self.ex.close()
+        self.tick(e)
+        self.assertIs(e.snapshot()["live"]["exchange_open"], False)
+
+
 class PullingEverythingTests(EngineLiveCase):
     def everything_up(self):
         e = self.ready(self.make_engine())
@@ -1363,6 +1502,14 @@ class LiveDashboardTests(unittest.TestCase):
 
     def test_todays_pnl_measures_from_the_live_start(self):
         self.assertAlmostEqual(self.summary()["today_usd"], -0.63)
+
+    def test_before_any_live_fill_there_is_still_a_summary(self):
+        with mock.patch("ledger.read_all_fills", return_value=[self.PAPER]):
+            s = self.summary()
+        self.assertEqual(s["fill_count"], 0)
+        self.assertEqual(s["net_usd"], 0)
+        self.assertEqual(s["today_usd"], 0)
+        self.assertEqual(s["equity_usd"], 47.75)
 
     def test_paper_still_starts_from_its_500(self):
         self.go_live(False)

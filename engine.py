@@ -71,6 +71,7 @@ FILLS_OVERLAP_SECONDS = 300    # ask for fills this far before the last one we k
 # than this isn't judged by its absence from the list.
 ORDER_LIST_LAG_SECONDS = 5.0
 FILL_STREAM_DOWN = "Can't see fills from Kalshi, so not trading until the fill stream is back"
+EXCHANGE_CLOSED = "Kalshi's exchange is closed, so not trading until it reopens"
 # Windows put the PC to sleep while the bot traded (twice on 2026-10-25/26).
 # Trading paused, and on wake the paper quotes left from before the sleep
 # were filled against trades made while it slept. Live orders would really
@@ -144,6 +145,8 @@ class Engine:
         self.user_stream = None
         self._live_thread = None
         self.live_account = None           # latest balance from Kalshi
+        self.exchange_open = True          # Kalshi's trading status, as last read
+        self.maker.exchange_is_closed = self._exchange_is_closed
         self._last_balance = self._last_reconcile = 0.0
         self._fills_from = time.time() - FILLS_OVERLAP_SECONDS
         self._mismatch_seen = None
@@ -319,6 +322,7 @@ class Engine:
         if wrong:
             return False, ("positions don't match Kalshi's: " + self._describe_mismatches(wrong)
                            + ". Nothing was traded. Sort out the difference on Kalshi, or in fills_log.jsonl, then start again.")
+        self._refresh_exchange_status()
         if not self._refresh_balance():
             return False, "couldn't read the balance from Kalshi"
         has_positions = any(p.net_contracts for p in self.risk.positions.values())
@@ -356,8 +360,9 @@ class Engine:
         now = time.time()
         if now - self._last_balance >= BALANCE_SECONDS:
             self._last_balance = now
+            self._refresh_exchange_status()
             self._refresh_balance()
-        if now - self._last_reconcile >= RECONCILE_SECONDS:
+        if now - self._last_reconcile >= RECONCILE_SECONDS and self.exchange_open:
             self._last_reconcile = now
             self._reconcile()
 
@@ -367,6 +372,26 @@ class Engine:
             with self.lock:
                 self.maker.process_live_fills(fills)
                 self._fills_from = max(self._fills_from, max(f["ts"] for f in fills) - FILLS_OVERLAP_SECONDS)
+
+    def _refresh_exchange_status(self):
+        """Kalshi closes Thursdays 3-5am ET and can pause trading at any time. Is
+        it trading on these markets' exchange? If it can't tell, what it last
+        read stands."""
+        try:
+            status = self.client.get_exchange_status()
+        except Exception as e:
+            log.warning("Couldn't read Kalshi's trading status: %s", e)
+            return
+        trading = {r["exchange_index"]: r.get("trading_active") for r in status.get("exchange_index_statuses", [])}
+        is_open = bool(status.get("trading_active")) and all(trading.get(x, True) for x in self._watched_exchanges())
+        if is_open != self.exchange_open:
+            log.warning("Kalshi's exchange %s", "reopened" if is_open else "closed: pulling quotes until it reopens")
+        self.exchange_open = is_open
+
+    def _exchange_is_closed(self) -> bool:
+        """For when orders keep failing. It may have closed since the last read."""
+        self._refresh_exchange_status()
+        return not self.exchange_open
 
     def _watched_exchanges(self) -> set:
         return {self.market_info[t].get("exchange_index") for t in self.cfg.watched_tickers
@@ -763,7 +788,7 @@ class Engine:
             tickers = list(self.cfg.watched_tickers)
             pending, self._pending_trades = self._pending_trades, {}
         live = self.mode == "LIVE"
-        if live and not self._fills_before_trading():
+        if live and not self._ready_to_trade():
             tickers = []
         marks = {}
         for ticker in tickers:
@@ -827,20 +852,25 @@ class Engine:
         self.cycles += 1
         self.last_cycle_at = now
 
-    def _fills_before_trading(self) -> bool:
-        """Book what the fill stream has delivered. If it isn't healthy, pull
-        every quote and don't trade: a bot that can't see its fills can't
-        enforce a single limit."""
+    def _ready_to_trade(self) -> bool:
+        """Book what the fill stream has delivered, then pull every quote and
+        don't trade if Kalshi is closed, or if the stream isn't healthy: a bot
+        that can't see its fills can't enforce a single limit. Trading picks up
+        by itself once the problem clears."""
         stream = self.user_stream
         if stream:
             self._apply_fills(stream.drain_fills())
-        if stream and stream.healthy:
-            if self.last_error == FILL_STREAM_DOWN:
+        if not self.exchange_open:
+            problem = EXCHANGE_CLOSED
+        elif not (stream and stream.healthy):
+            problem = FILL_STREAM_DOWN
+        else:
+            if self.last_error in (FILL_STREAM_DOWN, EXCHANGE_CLOSED):
                 self.last_error = None
             return True
         with self.lock:
-            self.maker.cancel_all("fill stream down")
-        self.last_error = FILL_STREAM_DOWN
+            self.maker.cancel_all(problem)
+        self.last_error = problem
         return False
 
     def _record_book(self, ticker, book):
@@ -918,6 +948,7 @@ class Engine:
                 "live": None if self.mode != "LIVE" else {
                     "account": self.live_account,
                     "fill_stream_ok": bool(self.user_stream and self.user_stream.healthy),
+                    "exchange_open": self.exchange_open,
                     "orders_failed_in_a_row": self.maker.orders_failed_in_a_row,
                     "positions_differ": self._describe_mismatches(self._mismatch_seen) if self._mismatch_seen else None,
                 },

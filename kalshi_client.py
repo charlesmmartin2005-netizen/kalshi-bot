@@ -234,6 +234,10 @@ class KalshiClient:
             if not cursor:
                 return rows
 
+    def get_exchange_status(self) -> dict:
+        """{trading_active, exchange_index_statuses: [{exchange_index, trading_active, ...}], ...}."""
+        return self._request("GET", "/exchange/status", authenticated=False)
+
     def get_endpoint_costs(self) -> dict:
         """{default_cost, endpoint_costs: [{method, path, cost}]}, in rate-limit tokens."""
         return self._request("GET", "/account/endpoint_costs")

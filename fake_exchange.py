@@ -8,7 +8,9 @@ or format fails a test here instead of on a real order.
 Where the docs don't settle something, this copies what the real API did on
 2026-11-04: the refusals for a post-only order that would cross and for too
 little money, an order list that lags behind orders and cancels, and a balance
-that resting orders don't reduce.
+that resting orders don't reduce. GET /exchange/status is shaped as it answered
+that day, but how orders fail while the exchange is closed is a guess: it hasn't
+been seen yet.
 """
 import json
 import math
@@ -87,6 +89,8 @@ class FakeExchange:
                                {"method": "DELETE", "path": "/trade-api/v2/portfolio/events/orders/:order_id", "cost": 2},
                                {"method": "GET", "path": "/trade-api/v2/portfolio/orders/:order_id", "cost": 2}]
         self.on_fill = None              # called with each new fill, as the fill stream would be
+        self.trading_active = True       # the whole exchange
+        self.exchange_trading = {}       # exchange index -> False, if only that one is closed
         self._ids = 0
 
     # ---- test controls ----------------------------------------------------
@@ -106,6 +110,23 @@ class FakeExchange:
 
     def set_book(self, ticker, bid=None, ask=None, bid_size=100, ask_size=100):
         self.books[ticker] = {"bid": bid, "ask": ask, "bid_size": bid_size, "ask_size": ask_size}
+
+    def close(self, exchange=None):
+        """Kalshi closes: orders marked cancel_order_on_pause go, and new ones fail."""
+        if exchange is None:
+            self.trading_active = False
+        else:
+            self.exchange_trading[exchange] = False
+        for o in self.resting():
+            if o["cancel_on_pause"] and not self._trading(o["ticker"]):
+                self._cancel(o["order_id"], {"market_ticker": o["ticker"]})
+
+    def reopen(self):
+        self.trading_active = True
+        self.exchange_trading = {}
+
+    def _trading(self, ticker):
+        return self.trading_active and self.exchange_trading.get(self.shard_of(ticker), True)
 
     def resting(self, ticker=None):
         return [o for o in self.orders.values() if o["status"] == "resting" and (not ticker or o["ticker"] == ticker)]
@@ -154,6 +175,13 @@ class FakeExchange:
         if method == "GET":
             if path in self.read_failures:
                 raise self.read_failures[path]
+            if path == "/exchange/status":
+                return FakeResponse(200, {
+                    "exchange_active": True, "trading_active": self.trading_active, "intra_exchange_transfers_active": True,
+                    "exchange_index_statuses": [{"description": "x", "exchange_active": True, "exchange_index": i,
+                                                 "intra_exchange_transfers_active": True,
+                                                 "trading_active": self.trading_active and self.exchange_trading.get(i, True)}
+                                                for i in self.shards]})
             if path == "/account/endpoint_costs":
                 return FakeResponse(200, {"default_cost": 10, "endpoint_costs": self.endpoint_costs})
             if path == "/portfolio/balance":
@@ -189,6 +217,8 @@ class FakeExchange:
             if isinstance(failure, Exception):
                 raise failure
             return _error(failure, "forced_failure")
+        if not self._trading(body.get("ticker", "")):
+            return _error(503, "exchange_closed")
         problem = self._invalid(body)
         if problem:
             return _error(400, "invalid_order", problem)

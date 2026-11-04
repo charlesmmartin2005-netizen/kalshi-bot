@@ -88,6 +88,7 @@ class MarketMaker:
         self._order_info: dict[str, tuple] = {}     # order or client order ID -> (strategy, model cents)
         self.orders_failed_in_a_row = 0
         self.budget = WriteBudget()
+        self.exchange_is_closed = lambda: False     # the engine asks Kalshi
 
     @property
     def paper(self):
@@ -328,7 +329,11 @@ class MarketMaker:
             log.error("Order failed (%d in a row): %s yes %s @ %d¢ on %s: %s",
                       self.orders_failed_in_a_row, action, size, price, ticker, e)
             if self.orders_failed_in_a_row >= self.cfg.risk.max_consecutive_errors:
-                self.risk._halt(f"{self.orders_failed_in_a_row} orders in a row rejected or unanswered; last: {e}")
+                if self.exchange_is_closed():
+                    log.warning("Orders are failing because Kalshi's exchange is closed, so waiting for it to reopen")
+                    self.orders_failed_in_a_row = 0
+                else:
+                    self.risk._halt(f"{self.orders_failed_in_a_row} orders in a row rejected or unanswered; last: {e}")
             return None
         self.orders_failed_in_a_row = 0
         return resp

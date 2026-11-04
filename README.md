@@ -253,7 +253,7 @@ order was placed and cancelled too.
 - **While running** it compares positions and resting orders with Kalshi's every
   15 seconds and cancels any order it isn't tracking.
 - **It pulls its quotes and stops trading** while it can't see fills, until the
-  stream is back and it has caught up.
+  stream is back and it has caught up, and while Kalshi's exchange is closed.
 - **It halts** (kill switch, survives restarts, cancels everything of ours on
   Kalshi) on the daily loss limit, 5 failed orders in a row, a position that
   differs from Kalshi's on two checks in a row, or 5 failed checks in a row.
@@ -343,9 +343,11 @@ server, in `~/kalshi-bot/.env`, set `KALSHI_PAPER_TRADING=false` and
 ssh kalshi-bot "sudo systemctl restart kalshi-bot"
 ```
 
-**Expect a halt in Kalshi's maintenance windows.** Orders fail while the exchange is
-down, and 5 failures in a row halt the bot. Nothing happens to it after that until
-you reset the kill switch and press start, which runs the start checks again.
+**Kalshi closes Thursdays 3-5am ET.** The bot reads Kalshi's trading status, pulls
+its quotes while it's closed, and trades again by itself when it reopens. How orders
+fail during a closure hadn't been seen as of 2026-11-04. If they fail and Kalshi's
+status doesn't say it's closed, 5 failures in a row halt the bot, and you'd reset the
+kill switch and press start, which runs the start checks again.
 
 **To stop:** use the dashboard's kill switch, which cancels everything. Stopping
 the service works too, and quotes then expire within 60 seconds. Neither closes
