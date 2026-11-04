@@ -27,7 +27,7 @@ import fair_value
 import ledger
 from config import BotConfig
 from fees import order_fee_cents
-from kalshi_client import KalshiClient, WriteBudget, normalize_orderbook, whole
+from kalshi_client import KalshiClient, WouldCross, WriteBudget, normalize_orderbook, whole
 from risk_manager import RiskManager
 from strategy import plan_quotes
 
@@ -320,6 +320,9 @@ class MarketMaker:
             missing = [k for k in ("order_id", "fill_count", "remaining_count") if k not in resp]
             if missing:
                 raise ValueError(f"the answer has no {missing}: {str(resp)[:200]}")
+        except WouldCross:
+            log.info("Quote %s yes @ %d¢ on %s would have crossed, so Kalshi refused it", action, price, ticker)
+            return None
         except Exception as e:
             self.orders_failed_in_a_row += 1
             log.error("Order failed (%d in a row): %s yes %s @ %d¢ on %s: %s",

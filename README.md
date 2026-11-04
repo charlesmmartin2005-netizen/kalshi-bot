@@ -228,12 +228,12 @@ Details and numbers in `research/README.md`.
 
 ## Going live
 
-Live mode is built, but **no order has been accepted yet**. `test_live.py`
-tests it against a fake exchange that follows Kalshi's docs as read on
-2026-11-04. `live_check.py` is what tries the real API. On 2026-11-04 balance,
-positions, orders, fills, order costs and the fill stream all answered as
-expected, and the first real orders were refused because the money was on the
-wrong exchange (step 3).
+Live mode is built, but **the whole bot hasn't traded real money yet**. `test_live.py`
+tests it against a fake exchange that follows Kalshi's docs and what the real API
+did on 2026-11-04. `live_check.py` is what tries the real API. On that day it
+bought and sold one real contract through the bot's own order code, and the order
+answer, the fill stream and the fills list all agreed on price and fee. A resting
+order was placed and cancelled too.
 
 ### What's different when it's live
 
@@ -317,10 +317,21 @@ ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --order --rea
 ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --take --real-money"
 ```
 
-These also answer what the docs leave open: whether resting orders hold money
-(the check reports it; if they do, the dashboard's total dips by what quotes
-hold), what a post-only order that would cross does, and the error for too little
-money. A key that can only read gets a 403 here.
+`--order` also reports whether resting orders hold money. If they do, the
+dashboard's total dips by what quotes hold. A key that can only read gets a 403
+here.
+
+What the real API showed on 2026-11-04, beyond the docs:
+
+- A post-only order that would cross is refused: 400 `invalid_order`, "post only
+  cross". The bot doesn't count that as a failed order.
+- Too little money is 400 `insufficient_balance`. No money at all on the market's
+  exchange is 404 `insufficient_shard_balance`.
+- The order list lags: for under 2 seconds it can miss a new order and still show a
+  cancelled one. The bot allows for that.
+- Taker fees are rounded to a hundredth of a cent, not up to a whole cent: 1.75¢ for
+  one contract near 50¢. Live P&L uses what Kalshi charged. `fees.py` still rounds
+  up, so paper overstates fees by under 1¢ an order.
 
 **5. Go live.** Make sure the PC's bot is off (only one bot can trade). On the
 server, in `~/kalshi-bot/.env`, set `KALSHI_PAPER_TRADING=false` and

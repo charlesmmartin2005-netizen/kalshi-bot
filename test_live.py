@@ -449,6 +449,27 @@ class RejectedOrderTests(LiveCase):
             self.evaluate(maker)
         self.assertTrue(self.risk.halted)
 
+    def test_a_quote_that_would_cross_isnt_a_failure(self):
+        # Kalshi refuses it with a 400. In a fast market that's the post-only
+        # flag doing its job, not something that should halt the bot.
+        maker = self.make_maker()
+        self.ex.set_book(T, 40, 41)            # the book moved after the bot read it
+        for _ in range(6):
+            maker._place(T, "buy", 41, 2, "fair-value", False)
+        self.assertFalse(self.risk.halted)
+        self.assertEqual(maker.orders_failed_in_a_row, 0)
+        self.assertEqual(maker.client.consecutive_errors, 0)
+        self.assertEqual(maker.resting_quotes.get(T, []), [])
+
+    def test_a_quote_that_would_cross_doesnt_clear_real_failures(self):
+        maker = self.make_maker()
+        self.ex.order_failures.extend([400] * 4)
+        for _ in range(4):
+            maker._place(T, "buy", 30, 2, "fair-value", False)
+        self.ex.set_book(T, 40, 41)
+        maker._place(T, "buy", 41, 2, "fair-value", False)
+        self.assertEqual(maker.orders_failed_in_a_row, 4)
+
     def test_kalshis_refusal_for_an_unfunded_exchange_counts_as_a_failure(self):
         # What happened for real on 2026-11-04.
         maker = self.make_maker()
@@ -962,6 +983,32 @@ class PositionCheckTests(EngineLiveCase):
         self.check_positions(e)
         self.assertNotIn(q.order_id, [x.order_id for x in e.maker.resting_quotes[T]])
 
+    def test_a_quote_too_new_for_a_lagging_list_stays_tracked(self):
+        # On 2026-11-04 Kalshi's list didn't show an order placed a moment
+        # earlier. Dropping it would leave it up, with a second one beside it.
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        q = e.maker.resting_quotes[T][0]
+        self.ex.order_list_lag_seconds = 2.0
+        self.check_positions(e)
+        self.assertIn(q.order_id, [x.order_id for x in e.maker.resting_quotes[T]])
+
+    def test_an_order_just_cancelled_but_still_listed_causes_no_trouble(self):
+        # The same lag the other way: the list still shows it, so the bot
+        # cancels it again and Kalshi says it's gone.
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.ex.order_list_lag_seconds = 2.0
+        for q in e.maker.resting_quotes[T]:
+            q.placed_at -= 60
+        e.maker._cancel_resting(T, "moving")
+        self.check_positions(e)
+        self.assertFalse(e.risk.halted)
+        self.assertEqual(self.ex.resting(T), [])
+        self.assertEqual(e.maker.orders_failed_in_a_row, 0)
+
     def test_a_quote_placed_after_the_list_was_read_stays_tracked(self):
         e = self.ready(self.make_engine())
         self.watch(e)
@@ -1350,14 +1397,14 @@ class LiveCheckTests(unittest.TestCase):
         self.ex.on_fill = lambda row: stream.handle(self.ex.ws_message(row))
         return stream
 
-    def run_check(self, *args, base_url=DEMO, client=None):
+    def run_check(self, *args, base_url=DEMO, client=None, wait_seconds=0.05):
         out = io.StringIO()
         if client is None:
             client = KalshiClient(base_url, FakeAuth())
             client._session = self.ex
         with mock.patch.object(KalshiClient, "MAX_REQUESTS_PER_SECOND", 1_000_000):
             code = live_check.run(list(args), client, ws_url="wss://fake", stream_factory=self.stream,
-                                  confirm=lambda _prompt: self.answer, out=out, wait_seconds=0.05)
+                                  confirm=lambda _prompt: self.answer, out=out, wait_seconds=wait_seconds)
         self.output = out.getvalue()
         return code
 
@@ -1395,6 +1442,26 @@ class LiveCheckTests(unittest.TestCase):
         self.assertEqual(self.ex.resting(), [])
         self.assertEqual(self.ex.positions, {})
         self.assertEqual(self.ex.balance, 5000)
+
+    def test_an_order_list_that_lags_isnt_a_failure(self):
+        # What the real order list did on 2026-11-04: an order placed a moment
+        # ago wasn't on it, and one cancelled a moment ago still was.
+        self.ex.order_list_lag_seconds = 0.1
+        self.assertEqual(self.run_check("--order", wait_seconds=2.0), 0, self.output)
+        self.assertEqual(self.ex.resting(), [])
+
+    def test_an_order_that_never_shows_up_is_a_failure(self):
+        self.ex.order_list_lag_seconds = 100
+        self.assertEqual(self.run_check("--order"), 1)
+
+    def test_it_says_when_resting_orders_hold_money(self):
+        self.assertEqual(self.run_check("--order"), 0, self.output)
+        self.assertIn("resting orders hold money", self.output)
+
+    def test_it_says_when_they_dont(self):
+        self.ex.resting_holds_funds = False
+        self.assertEqual(self.run_check("--order"), 0, self.output)
+        self.assertIn("resting orders do not hold money", self.output)
 
     def test_the_order_check_cleans_up_a_post_only_order_that_ended_up_resting(self):
         real = self.ex._post_order

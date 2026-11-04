@@ -27,6 +27,11 @@ class KalshiRateLimitError(Exception):
     pass
 
 
+class WouldCross(Exception):
+    """Kalshi refused a post-only order because it would have traded. That's the
+    flag doing its job, not a failure."""
+
+
 class WriteBudget:
     """Stays inside Kalshi's limit on orders and cancels. A Basic account gets 100
     tokens a second, refilling continuously, and can't bank more than one
@@ -121,11 +126,13 @@ class KalshiClient:
             time.sleep(wait)
 
     def _request(self, method: str, path: str, params: dict = None, json_body: dict = None,
-                  authenticated: bool = True, write: bool = False, missing_ok: bool = False):
+                  authenticated: bool = True, write: bool = False, missing_ok: bool = False,
+                  post_only: bool = False):
         """write: an order or cancel. Kalshi meters writes in their own bucket,
         so they don't wait behind market-data requests, and a 429 isn't retried:
         an order sent again seconds later is at a price from seconds ago.
-        missing_ok: a 404 is an answer ({}), not an error."""
+        missing_ok: a 404 is an answer ({}), not an error.
+        post_only: Kalshi's refusal for crossing raises WouldCross, not an error."""
         url = f"{self.base_url}{path}"
         if authenticated and self.auth is None:
             raise KalshiAuthMissing(
@@ -159,6 +166,8 @@ class KalshiClient:
 
         if missing_ok and resp.status_code == 404:
             return {}
+        if post_only and resp.status_code == 400 and "post only cross" in resp.text:
+            raise WouldCross(f"{path}: {resp.text[:200]}")
         if resp.status_code >= 400:
             self._consecutive_errors += 1
             log.error("HTTP %s on %s %s: %s", resp.status_code, method, path, resp.text[:500])
@@ -281,7 +290,7 @@ class KalshiClient:
             body["cancel_order_on_pause"] = True
         if expires_at is not None:
             body["expiration_time"] = int(expires_at)
-        return self._request("POST", "/portfolio/events/orders", json_body=body, write=True)
+        return self._request("POST", "/portfolio/events/orders", json_body=body, write=True, post_only=post_only)
 
     def cancel_order(self, order_id: str, ticker: str) -> dict:
         """DELETE /portfolio/events/orders/{id}. Kalshi can't find the shard

@@ -186,7 +186,18 @@ def check_answer(r, answer):
     return r.check(not missing, "the answer has the fields the bot reads", f"missing {missing}: {json.dumps(answer)[:300]}")
 
 
-def check_order(r, client, market):
+def _wait_for(test, seconds, step=0.1):
+    """Seconds until test() is true, or None if it still isn't after `seconds`."""
+    start = time.time()
+    while not test():
+        left = seconds - (time.time() - start)
+        if left <= 0:
+            return None
+        time.sleep(min(step, left))
+    return time.time() - start
+
+
+def check_order(r, client, market, wait_seconds):
     ticker = market["ticker"]
     r.say(f"Resting order on {ticker}")
     before = client.get_balance()["balance"]
@@ -197,22 +208,27 @@ def check_order(r, client, market):
         return
     r.learned("answer: " + json.dumps(answer))
     if not check_answer(r, answer):
-        leave_nothing_behind(r, client, ticker)
+        leave_nothing_behind(r, client, ticker, wait_seconds)
         return
     order_id = answer["order_id"]
-    listed = [o for o in client.get_orders(status="resting", ticker=ticker)["orders"] if o["order_id"] == order_id]
-    r.check(bool(listed), "Kalshi lists it as resting")
+
+    # Kalshi's order list lags orders and cancels, so these wait for it.
+    def listed():
+        return any(o["order_id"] == order_id for o in client.get_orders(status="resting", ticker=ticker)["orders"])
+    shown = _wait_for(listed, wait_seconds)
+    r.check(shown is not None, f"Kalshi lists it as resting, after {shown or 0:.1f}s", f"not listed after {wait_seconds:g}s")
+    _wait_for(lambda: client.get_balance()["balance"] != before, min(wait_seconds, 5), step=1.1)   # one read a second
     held = before - client.get_balance()["balance"]
     r.learned(f"resting orders {'hold' if held else 'do not hold'} money: the balance moved by {held}¢ for a 1¢ order")
     cancelled = _attempt(r, "cancelled", lambda: client.cancel_order(order_id, ticker))
     if cancelled is not None:
         r.check(float(cancelled.get("reduced_by", 0)) == 1, "the cancel took off one contract", json.dumps(cancelled))
-    gone = [o for o in client.get_orders(status="resting", ticker=ticker)["orders"] if o["order_id"] == order_id]
-    r.check(not gone, "Kalshi no longer lists it")
+    gone = _wait_for(lambda: not listed(), wait_seconds)
+    r.check(gone is not None, f"Kalshi no longer lists it, after {gone or 0:.1f}s", f"still listed after {wait_seconds:g}s")
     r.check(client.cancel_order(order_id, ticker) == {}, "cancelling it again is treated as already gone")
     check_post_only(r, client, market)
     check_too_big(r, client, ticker, client.get_balance()["balance"])
-    leave_nothing_behind(r, client, ticker)
+    leave_nothing_behind(r, client, ticker, wait_seconds)
 
 
 def check_post_only(r, client, market):
@@ -242,13 +258,13 @@ def check_too_big(r, client, ticker, balance_cents):
     r.fail(f"an order for {count} contracts at 1¢ was accepted: {json.dumps(answer)[:200]}")
 
 
-def leave_nothing_behind(r, client, ticker):
+def leave_nothing_behind(r, client, ticker, wait_seconds):
     def mine():
         return [o for o in client.get_orders(status="resting", ticker=ticker)["orders"]
                 if o.get("client_order_id", "").startswith(ID_PREFIX)]
     for o in mine():
         client.cancel_order(o["order_id"], ticker)
-    r.check(not mine(), "this check left no orders resting")
+    r.check(_wait_for(lambda: not mine(), wait_seconds) is not None, "this check left no orders resting")
 
 
 # ---- takes ---------------------------------------------------------------------
@@ -353,7 +369,7 @@ def run(argv, client, ws_url, stream_factory, confirm, out, wait_seconds=10.0) -
     market = pick_market(r, client)
     if market and check_funds(r, client, market):
         if args.order:
-            check_order(r, client, market)
+            check_order(r, client, market, wait_seconds)
         if args.take:
             check_take(r, client, market, stream, wait_seconds)
     r.say()

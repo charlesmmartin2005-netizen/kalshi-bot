@@ -5,13 +5,15 @@ docs (checked 2026-11-04): V2 order fields, YES-side bid/ask, fixed-point
 strings, and a 400 for anything the docs call invalid. So a wrong path, field
 or format fails a test here instead of on a real order.
 
-What the docs don't settle is a guess, and live_check.py checks it against the
-real API: holding funds for resting orders, the error for too little money,
-and post-only orders that would cross being rejected.
+Where the docs don't settle something, this copies what the real API did on
+2026-11-04: the refusals for a post-only order that would cross and for too
+little money, and an order list that lags behind orders and cancels. Whether
+resting orders hold funds is still a guess until live_check.py reports it.
 """
 import json
 import math
 import re
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -77,6 +79,8 @@ class FakeExchange:
         self.read_failures: dict[str, Exception] = {}   # path -> raised on every GET of it
         self.page_size = 100
         self.post_only_cross_answers_empty = False
+        self.order_list_lag_seconds = 0.0    # GET /portfolio/orders shows the book this long ago
+        self.resting_holds_funds = True
         # As GET /account/endpoint_costs answered on 2026-11-04 (orders aren't
         # listed because they cost the default).
         self.endpoint_costs = [{"method": "DELETE", "path": "/trade-api/v2/portfolio/events/orders", "cost": 2},
@@ -194,7 +198,7 @@ class FakeExchange:
             if self.post_only_cross_answers_empty:
                 return FakeResponse(201, {"order_id": "crossed", "client_order_id": body.get("client_order_id", ""),
                                           "fill_count": "0.00", "remaining_count": "0.00", "ts_ms": 1793800000000})
-            return _error(400, "post_only_cross")
+            return _error(400, "invalid_order", "invalid order", "post only cross")
         held_cost = self._order_cost(body["ticker"], side, price, count)
         funds = self.shards[self.shard_of(body["ticker"])]
         if held_cost > funds and not funds:
@@ -202,14 +206,14 @@ class FakeExchange:
             return _error(404, "insufficient_shard_balance", "insufficient shard balance",
                           "Exchange user not found. For Predictions: reference documentation Exchange Sharding documentation.")
         if held_cost > funds:
-            return _error(400, "insufficient_balance")
+            return _error(400, "insufficient_balance", "insufficient balance")
 
         self._ids += 1
         order_id = f"kalshi-order-{self._ids}"
         order = {"order_id": order_id, "client_order_id": body.get("client_order_id", ""), "ticker": body["ticker"],
                  "side": side, "price": price, "count": count, "remaining": count, "filled": 0.0,
                  "status": "resting", "tif": body["time_in_force"], "post_only": bool(body.get("post_only")),
-                 "expiration_time": body.get("expiration_time"), "held": 0,
+                 "expiration_time": body.get("expiration_time"), "held": 0, "created_at": time.time(), "ended_at": None,
                  "cancel_on_pause": body.get("cancel_order_on_pause"),
                  "stp": body["self_trade_prevention_type"]}
         self.orders[order_id] = order
@@ -230,7 +234,8 @@ class FakeExchange:
             order["status"] = "canceled"
             order["remaining"] = 0.0
         else:
-            order["held"] = round(self._cost(side, price) * order["remaining"])
+            if self.resting_holds_funds:
+                order["held"] = round(self._cost(side, price) * order["remaining"])
             self.shards[self.shard_of(body["ticker"])] -= order["held"]
         if self.lose_next_response:
             self.lose_next_response = False
@@ -288,6 +293,7 @@ class FakeExchange:
         reduced = o["remaining"]
         o["remaining"] = 0.0
         o["status"] = "canceled"
+        o["ended_at"] = time.time()
         return FakeResponse(200, {"order_id": order_id, "client_order_id": o["client_order_id"],
                                   "reduced_by": _fp(reduced), "ts_ms": 1793800000000})
 
@@ -329,8 +335,13 @@ class FakeExchange:
 
     def _orders_rows(self, params):
         rows = []
+        seen_at = time.time() - self.order_list_lag_seconds
         for o in self.orders.values():
-            if params.get("status") and o["status"] != params["status"]:
+            if o["created_at"] > seen_at:
+                continue                     # too new to be on the list yet
+            cancelled_since = o["ended_at"] is not None and o["ended_at"] > seen_at
+            status = "resting" if cancelled_since else o["status"]
+            if params.get("status") and status != params["status"]:
                 continue
             if params.get("ticker") and o["ticker"] != params["ticker"]:
                 continue

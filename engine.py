@@ -66,6 +66,10 @@ LIVE_TICK_SECONDS = 1.0        # how often the live housekeeping thread looks fo
 BALANCE_SECONDS = 5.0          # Kalshi allows Basic accounts one balance read a second
 RECONCILE_SECONDS = 15.0       # compare positions and resting orders with Kalshi's
 FILLS_OVERLAP_SECONDS = 300    # ask for fills this far before the last one we know of; repeats are ignored
+# Kalshi's order list lags: on 2026-11-04 an order placed a moment earlier wasn't
+# on it, and one just cancelled still was, for under 2 seconds. A quote younger
+# than this isn't judged by its absence from the list.
+ORDER_LIST_LAG_SECONDS = 5.0
 FILL_STREAM_DOWN = "Can't see fills from Kalshi, so not trading until the fill stream is back"
 # Windows put the PC to sleep while the bot traded (twice on 2026-10-25/26).
 # Trading paused, and on wake the paper quotes left from before the sleep
@@ -446,7 +450,8 @@ class Engine:
         """Kalshi's resting orders against the bot's: cancel any it isn't tracking
         (e.g. the answer was lost, so nothing would ever replace it), and stop
         tracking any Kalshi no longer has (expired or cancelled by Kalshi), so
-        it quotes again. A quote newer than the list isn't on it yet."""
+        it quotes again. The list lags, so a new quote may not be on it yet, and
+        cancelling one it still shows just gets "already gone"."""
         on_kalshi = {o["order_id"] for o in orders}
         with self.lock:
             tracked = {q.order_id for quotes in self.maker.resting_quotes.values() for q in quotes}
@@ -458,7 +463,8 @@ class Engine:
                     except Exception as e:
                         log.error("Failed to cancel order %s: %s", o["order_id"], e)
             for quotes in self.maker.resting_quotes.values():
-                quotes[:] = [q for q in quotes if q.order_id in on_kalshi or q.placed_at >= listed_at]
+                quotes[:] = [q for q in quotes if q.order_id in on_kalshi
+                             or q.placed_at >= listed_at - ORDER_LIST_LAG_SECONDS]
 
     def stop(self, reason: str = "stopped by user") -> tuple[bool, str]:
         if not self.running:
