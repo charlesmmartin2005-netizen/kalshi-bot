@@ -7,8 +7,8 @@ or format fails a test here instead of on a real order.
 
 Where the docs don't settle something, this copies what the real API did on
 2026-11-04: the refusals for a post-only order that would cross and for too
-little money, and an order list that lags behind orders and cancels. Whether
-resting orders hold funds is still a guess until live_check.py reports it.
+little money, an order list that lags behind orders and cancels, and a balance
+that resting orders don't reduce.
 """
 import json
 import math
@@ -80,7 +80,7 @@ class FakeExchange:
         self.page_size = 100
         self.post_only_cross_answers_empty = False
         self.order_list_lag_seconds = 0.0    # GET /portfolio/orders shows the book this long ago
-        self.resting_holds_funds = True
+        self.resting_holds_funds = False
         # As GET /account/endpoint_costs answered on 2026-11-04 (orders aren't
         # listed because they cost the default).
         self.endpoint_costs = [{"method": "DELETE", "path": "/trade-api/v2/portfolio/events/orders", "cost": 2},
@@ -122,7 +122,9 @@ class FakeExchange:
         o["filled"] = round(o["filled"] + count, 2)
         if o["remaining"] <= 0:
             o["status"] = "executed"
-        o["held"] = max(0, o["held"] - round(self._cost(o["side"], price) * count))
+        released = min(o["held"], round(self._cost(o["side"], price) * count))
+        o["held"] -= released
+        self.shards[self.shard_of(o["ticker"])] += released
         return self._fill(o, count, price, is_taker=False, fee_cents=fee_cents)
 
     def ws_message(self, fill, sid=13):
@@ -305,10 +307,7 @@ class FakeExchange:
         if after == 0:
             del self.positions[order["ticker"]]
         shard = self.shard_of(order["ticker"])
-        if is_taker:
-            self.shards[shard] -= round(self._cost(order["side"], price) * count) + fee_cents
-        else:
-            self.shards[shard] -= fee_cents
+        self.shards[shard] -= round(self._cost(order["side"], price) * count) + fee_cents
         self._ids += 1
         now = datetime.now(timezone.utc)
         side = "yes" if order["side"] == "bid" else "no"

@@ -1455,23 +1455,36 @@ class LiveCheckTests(unittest.TestCase):
         self.assertEqual(self.run_check("--order"), 1)
 
     def test_it_says_when_resting_orders_hold_money(self):
+        self.ex.resting_holds_funds = True
         self.assertEqual(self.run_check("--order"), 0, self.output)
         self.assertIn("resting orders hold money", self.output)
 
     def test_it_says_when_they_dont(self):
-        self.ex.resting_holds_funds = False
         self.assertEqual(self.run_check("--order"), 0, self.output)
         self.assertIn("resting orders do not hold money", self.output)
 
-    def test_the_order_check_cleans_up_a_post_only_order_that_ended_up_resting(self):
-        real = self.ex._post_order
-
-        def ask_moved_away(body):
-            self.ex.set_book(T, 40, 70)        # after the check read the 60¢ ask
-            return real(body)
-        self.ex._post_order = ask_moved_away
+    def test_the_order_check_never_bids_near_the_market(self):
+        # 2026-11-04: it bid at an ask it had read 8 seconds earlier. By then that
+        # didn't cross, so the bid rested, someone sold to it, and "Every check
+        # passed" left the user holding a contract.
         self.assertEqual(self.run_check("--order"), 0, self.output)
-        self.assertEqual(self.ex.resting(), [])
+        orders = [r[3] for r in self.ex.requests if r[0] == "POST"]
+        self.assertEqual([(o["price"], o["count"]) for o in orders], [("0.0100", "1.00")])
+
+    def test_the_order_check_says_so_if_it_leaves_a_position(self):
+        real = self.ex._cancel
+
+        def someone_sold_to_it_first(order_id, params):
+            self.ex.hit(order_id)
+            return real(order_id, params)
+        self.ex._cancel = someone_sold_to_it_first
+        self.assertEqual(self.run_check("--order"), 1)
+        self.assertEqual(self.ex.positions, {T: 1.0})
+        self.assertIn("close it on Kalshi", self.output)
+
+    def test_the_order_check_doesnt_blame_a_position_that_was_already_there(self):
+        self.ex.positions[T] = 3.0
+        self.assertEqual(self.run_check("--order"), 0, self.output)
 
     def test_the_order_check_leaves_the_bots_own_orders_alone(self):
         client = KalshiClient(self.DEMO, FakeAuth())
@@ -1494,6 +1507,7 @@ class LiveCheckTests(unittest.TestCase):
             return FakeResponse(201, {"order": json.loads(real(body).text)})
         self.ex._post_order = old_shape
         self.assertEqual(self.run_check("--order"), 1)
+        self.assertEqual(self.ex.resting(), [])     # it still cleans up after itself
 
     def test_the_take_check_passes_and_ends_flat(self):
         self.assertEqual(self.run_check("--take"), 0, self.output)

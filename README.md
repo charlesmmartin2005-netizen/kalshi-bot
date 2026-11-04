@@ -317,9 +317,8 @@ ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --order --rea
 ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --take --real-money"
 ```
 
-`--order` also reports whether resting orders hold money. If they do, the
-dashboard's total dips by what quotes hold. A key that can only read gets a 403
-here.
+A key that can only read gets a 403 here. `--order` only ever bids at 1¢, and both
+checks say so if they leave you with a position.
 
 What the real API showed on 2026-11-04, beyond the docs:
 
@@ -329,6 +328,9 @@ What the real API showed on 2026-11-04, beyond the docs:
   exchange is 404 `insufficient_shard_balance`.
 - The order list lags: for under 2 seconds it can miss a new order and still show a
   cancelled one. The bot allows for that.
+- Resting orders don't reduce the balance Kalshi reports (seen with a 1¢ order), so
+  the dashboard's total doesn't dip for them, and the bot takes them off itself when
+  deciding what it can pay for.
 - Taker fees are rounded to a hundredth of a cent, not up to a whole cent: 1.75¢ for
   one contract near 50¢. Live P&L uses what Kalshi charged. `fees.py` still rounds
   up, so paper overstates fees by under 1¢ an order.

@@ -334,10 +334,10 @@ class MarketMaker:
         return resp
 
     def _can_pay(self, ticker, action, price, size) -> bool:
-        """Can the account pay for this order, after what's held for the quotes
-        already resting? Closing a position costs nothing. This counts resting
-        quotes even if Kalshi's balance already leaves them out, which only
-        makes it cautious."""
+        """Can the account pay for this order, on top of the quotes already
+        resting? Kalshi's balance doesn't take resting orders out (a 1¢ order
+        left it unchanged, 2026-11-04), so this does. Closing a position costs
+        nothing."""
         if self.available_cents is None:
             return False
         opening = size - self._closing_part(ticker, action, size)

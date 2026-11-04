@@ -18,11 +18,10 @@ Orders. Against Kalshi's demo environment these use mock funds. To use the real
 one, add --real-money, and it asks first:
 
     python live_check.py --order    One contract bid at 1¢, cancelled straight
-                                    away. Then a bid at the ask with post-only
-                                    (it should not fill) and one too big to pay
-                                    for (it should be refused). Costs nothing
-                                    unless Kalshi ignores post-only: at most
-                                    one contract at the ask.
+                                    away. At most 1¢, if someone sells at 1¢ in
+                                    the moment it's up. It never bids near the
+                                    market, because a price read seconds ago can
+                                    rest there and get filled.
 
     python live_check.py --take     Buys one contract and sells it straight
                                     back, as the bot's takes do: the spread and
@@ -200,6 +199,15 @@ def _wait_for(test, seconds, step=0.1):
 def check_order(r, client, market, wait_seconds):
     ticker = market["ticker"]
     r.say(f"Resting order on {ticker}")
+    start = client.get_positions().get(ticker, 0)
+    rest_and_cancel(r, client, ticker, wait_seconds)
+    leave_nothing_behind(r, client, ticker, wait_seconds)
+    now = client.get_positions().get(ticker, 0)
+    r.check(now == start, "no new position",
+            f"you now hold {now - start:g} more contract(s) on {ticker}: close it on Kalshi, or let it settle")
+
+
+def rest_and_cancel(r, client, ticker, wait_seconds):
     before = client.get_balance()["balance"]
     answer = _attempt(r, "one contract bid at 1¢, post-only, with an expiry", lambda: client.create_order(
         ticker, "buy", 1, 1, post_only=True, expires_at=int(time.time()) + QUOTE_EXPIRY_SECONDS,
@@ -208,7 +216,6 @@ def check_order(r, client, market, wait_seconds):
         return
     r.learned("answer: " + json.dumps(answer))
     if not check_answer(r, answer):
-        leave_nothing_behind(r, client, ticker, wait_seconds)
         return
     order_id = answer["order_id"]
 
@@ -226,36 +233,6 @@ def check_order(r, client, market, wait_seconds):
     gone = _wait_for(lambda: not listed(), wait_seconds)
     r.check(gone is not None, f"Kalshi no longer lists it, after {gone or 0:.1f}s", f"still listed after {wait_seconds:g}s")
     r.check(client.cancel_order(order_id, ticker) == {}, "cancelling it again is treated as already gone")
-    check_post_only(r, client, market)
-    check_too_big(r, client, ticker, client.get_balance()["balance"])
-    leave_nothing_behind(r, client, ticker, wait_seconds)
-
-
-def check_post_only(r, client, market):
-    ticker, ask = market["ticker"], top_of_book(market)["yes_ask"]
-    if ask is None:
-        r.learned("skipped the post-only test: nothing offered in this market")
-        return
-    try:
-        answer = client.create_order(ticker, "buy", 1, ask, post_only=True, client_order_id=_order_id(),
-                                     expires_at=int(time.time()) + QUOTE_EXPIRY_SECONDS)
-    except Exception as e:
-        r.ok(f"a post-only bid at the {ask}¢ ask was refused ({_error_text(e)})")
-        return
-    r.learned("post-only answer: " + json.dumps(answer))
-    r.check(float(answer.get("fill_count", 0)) == 0, "a post-only bid at the ask did not fill",
-            f"it filled, so you now hold a contract on {ticker}")
-
-
-def check_too_big(r, client, ticker, balance_cents):
-    count = 2 * balance_cents + 100           # at 1¢ each: twice the balance, and more than an empty account has
-    try:
-        answer = client.create_order(ticker, "buy", count, 1, post_only=True, client_order_id=_order_id(),
-                                     expires_at=int(time.time()) + QUOTE_EXPIRY_SECONDS)
-    except Exception as e:
-        r.ok(f"an order too big to pay for was refused ({_error_text(e)})")
-        return
-    r.fail(f"an order for {count} contracts at 1¢ was accepted: {json.dumps(answer)[:200]}")
 
 
 def leave_nothing_behind(r, client, ticker, wait_seconds):
@@ -357,7 +334,7 @@ def run(argv, client, ws_url, stream_factory, confirm, out, wait_seconds=10.0) -
                   "or point KALSHI_BASE_URL and KALSHI_WS_URL at the demo environment.")
             return 2
         cost = ("about 5¢ in spread and fees, and possibly one contract you'd have to close" if args.take
-                else "nothing unless Kalshi ignores post-only, then one contract at the ask")
+                else "at most 1¢: one contract bid at 1¢, cancelled straight away")
         if confirm(f"Send real orders on your real account? Cost: {cost}. Type yes to go ahead: ").strip().lower() != "yes":
             r.say("Nothing sent.")
             return 2
