@@ -228,11 +228,12 @@ Details and numbers in `research/README.md`.
 
 ## Going live
 
-Live mode is built, but **it hasn't sent a real order yet**. `test_live.py`
+Live mode is built, but **no order has been accepted yet**. `test_live.py`
 tests it against a fake exchange that follows Kalshi's docs as read on
-2026-11-04. `live_check.py` is what tries the real API, and on 2026-11-04 only
-its read-only part had been run: balance, positions, orders, fills, order costs
-and the fill stream all answered as expected.
+2026-11-04. `live_check.py` is what tries the real API. On 2026-11-04 balance,
+positions, orders, fills, order costs and the fill stream all answered as
+expected, and the first real orders were refused because the money was on the
+wrong exchange (step 3).
 
 ### What's different when it's live
 
@@ -257,8 +258,8 @@ and the fill stream all answered as expected.
   Kalshi) on the daily loss limit, 5 failed orders in a row, a position that
   differs from Kalshi's on two checks in a row, or 5 failed checks in a row.
 - **The daily loss limit survives a restart** (`risk_day.json`).
-- **No order goes out** that the account can't pay for, or past Kalshi's limit on
-  orders per second. Quotes leave room in that limit for takes.
+- **No order goes out** that the money on that market's exchange can't pay for, or
+  past Kalshi's limit on orders per second. Quotes leave room in that limit for takes.
 - **The dashboard** shows Kalshi's balance, and only live fills. Paper and live
   rows share `fills_log.jsonl` and never mix. Profit is measured from
   `KALSHI_LIVE_START_USD`, so update it if you deposit or withdraw.
@@ -298,7 +299,16 @@ before.
 powershell -ExecutionPolicy Bypass -File deploy-server.ps1
 ```
 
-**3. Try the real API.** The first command sends nothing. The others send real
+**3. Move your money to the exchange BTC trades on.** Kalshi runs several exchanges
+and checks funds on the market's own one. BTC is on exchange 2, and a new
+account's money is usually on exchange 0. Kalshi's app and website move money for
+you when you trade, but API orders don't: they're refused with
+`insufficient_shard_balance`. Move it at
+https://kalshi.com/account/exchange-indexes. The bot won't start while there's
+nothing there to spend.
+
+**4. Try the real API.** The first command sends nothing and shows the money on
+each exchange. The others send real
 orders, need `--real-money`, and ask first. `--take` costs about 5¢.
 
 ```
@@ -312,7 +322,7 @@ These also answer what the docs leave open: whether resting orders hold money
 hold), what a post-only order that would cross does, and the error for too little
 money. A key that can only read gets a 403 here.
 
-**4. Go live.** Make sure the PC's bot is off (only one bot can trade). On the
+**5. Go live.** Make sure the PC's bot is off (only one bot can trade). On the
 server, in `~/kalshi-bot/.env`, set `KALSHI_PAPER_TRADING=false` and
 `KALSHI_LIVE_START_USD` to your balance, then:
 

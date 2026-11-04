@@ -1303,8 +1303,10 @@ function renderBalance() {
 }
 function liveBanner() {
   const l = S.live || {}, a = l.account;
-  const money = a ? `Kalshi shows ${usd(a.balance_usd)} available and ${usd(a.portfolio_value_usd)} in positions.` : "Waiting for the balance from Kalshi.";
+  const here = a && a.spendable_usd != null ? ` (${usd(a.spendable_usd)} on the exchange these markets trade on)` : "";
+  const money = a ? `Kalshi shows ${usd(a.balance_usd)} in the account${here} and ${usd(a.portfolio_value_usd)} in positions.` : "Waiting for the balance from Kalshi.";
   const trouble = [];
+  if (a && a.spendable_usd === 0) trouble.push("<b>No money on the exchange these markets trade on.</b> Move some at kalshi.com/account/exchange-indexes: API orders don't move it for you.");
   if (S.running && !l.fill_stream_ok) trouble.push("<b>Can't see fills from Kalshi.</b> Quotes are pulled and nothing trades until the fill stream is back.");
   if (l.positions_differ) trouble.push(`<b>Positions differ from Kalshi's:</b> ${esc(l.positions_differ)}. Checking again, and the bot halts if they still differ.`);
   if (l.orders_failed_in_a_row) trouble.push(`<b>${l.orders_failed_in_a_row} order${l.orders_failed_in_a_row === 1 ? "" : "s"} in a row failed.</b> ${S.risk.max_api_errors} halts the bot. See the log.`);

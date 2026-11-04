@@ -79,7 +79,8 @@ class MarketMaker:
         # quote on that side (0 = reached it); dashboard/health checks read it.
         self.fill_stats = {"trades": 0, "no_quote": 0, "miss_hist": [0] * 11}
         # Live only.
-        self.available_cents: float | None = None   # Kalshi's available balance; None = not known, so no orders
+        # What can be spent on these markets' exchange (Engine._spendable_cents). None = not known, so no orders.
+        self.available_cents: float | None = None
         self._seen_fills: set[tuple] = set()        # (trade_id, order_id) already handled
         # Contracts booked from an order's own answer that Kalshi hasn't sent
         # as fills yet: those fills, when they arrive, are already counted.

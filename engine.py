@@ -306,7 +306,7 @@ class Engine:
             self._apply_fills(self.client.get_fills(min_ts=self._fills_from))
             positions = self.client.get_positions()
             mine = {t for t, p in self.risk.positions.items() if p.net_contracts}
-            ask = sorted(t for t in mine | set(positions) if self._is_ours(t))
+            ask = sorted(t for t in mine | set(positions) | set(self.cfg.watched_tickers) if self._is_ours(t))
             for m in self.client.get_markets_batch(ask):
                 self.market_info[m["ticker"]] = m
         except Exception as e:
@@ -317,6 +317,12 @@ class Engine:
                            + ". Nothing was traded. Sort out the difference on Kalshi, or in fills_log.jsonl, then start again.")
         if not self._refresh_balance():
             return False, "couldn't read the balance from Kalshi"
+        has_positions = any(p.net_contracts for p in self.risk.positions.values())
+        if self.maker.available_cents is not None and self.maker.available_cents <= 0 and not has_positions:
+            where = " or ".join(str(s) for s in sorted(self._watched_exchanges()))
+            return False, (f"there's no money on exchange {where}, where these markets trade. Kalshi's app moves money "
+                           "between its exchanges for you, but API orders don't. Move some at "
+                           "https://kalshi.com/account/exchange-indexes, then start again.")
         now = time.time()
         self._last_balance = self._last_reconcile = now
         self._mismatch_seen, self._reconcile_failures = None, 0
@@ -358,6 +364,27 @@ class Engine:
                 self.maker.process_live_fills(fills)
                 self._fills_from = max(self._fills_from, max(f["ts"] for f in fills) - FILLS_OVERLAP_SECONDS)
 
+    def _watched_exchanges(self) -> set:
+        return {self.market_info[t].get("exchange_index") for t in self.cfg.watched_tickers
+                if t in self.market_info} - {None}
+
+    def _spendable_cents(self, balance: dict):
+        """What the bot can spend. Kalshi checks funds on each market's own
+        exchange and API orders don't move money between them, while "balance"
+        is the total across all of them: on 2026-11-04 it read $49.24 with $0 on
+        the exchange BTC trades on, and every order came back 404. Coin markets
+        share one exchange; across several, the smallest amount is the cautious
+        number. None = not known yet, so no orders. Keys restricted to a
+        subaccount get no breakdown, only the total."""
+        rows = balance.get("balance_breakdown")
+        if rows is None:
+            return balance["balance"]
+        exchanges = self._watched_exchanges()
+        if not exchanges:
+            return None
+        on_exchange = {r["exchange_index"]: round(float(r["balance"]) * 100) for r in rows}
+        return min(on_exchange.get(x, 0) for x in exchanges)
+
     def _refresh_balance(self) -> bool:
         try:
             b = self.client.get_balance()
@@ -365,9 +392,10 @@ class Engine:
             log.warning("Couldn't read the balance from Kalshi: %s", e)
             return False
         with self.lock:
-            self.maker.available_cents = b["balance"]
+            spendable = self._spendable_cents(b)
+            self.maker.available_cents = spendable
             self.live_account = {"balance_usd": b["balance"] / 100, "portfolio_value_usd": b.get("portfolio_value", 0) / 100,
-                                 "updated": time.time()}
+                                 "spendable_usd": None if spendable is None else spendable / 100, "updated": time.time()}
         return True
 
     def _position_mismatches(self, positions: dict) -> dict:

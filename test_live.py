@@ -449,6 +449,15 @@ class RejectedOrderTests(LiveCase):
             self.evaluate(maker)
         self.assertTrue(self.risk.halted)
 
+    def test_kalshis_refusal_for_an_unfunded_exchange_counts_as_a_failure(self):
+        # What happened for real on 2026-11-04.
+        maker = self.make_maker()
+        self.ex.shards.update({0: 4924, 2: 0})
+        for _ in range(3):
+            self.evaluate(maker)
+        self.assertTrue(self.risk.halted)
+        self.assertIn("insufficient_shard_balance", self.risk.halt_reason)
+
     def test_an_answer_in_another_shape_counts_as_a_failure(self):
         # The order may be up, but with no ID nothing can cancel it. Carrying on
         # would place another every cycle, so it must count toward the halt.
@@ -578,8 +587,9 @@ class EngineLiveCase(LiveCase):
     def watch(self, e, ticker=T, hours_to_close=6, **book_args):
         if ticker not in e.cfg.watched_tickers:
             e.cfg.watched_tickers.append(ticker)
-        e.market_info[ticker] = {"ticker": ticker, "close_time": iso(hours_to_close)}
+        e.market_info[ticker] = {"ticker": ticker, "close_time": iso(hours_to_close), "exchange_index": 2}
         e._current_book = lambda _t: book(**book_args)
+        e._refresh_balance()
 
     def check_positions(self, e):
         e._last_reconcile = 0
@@ -593,6 +603,7 @@ class LiveStartTests(EngineLiveCase):
         self.assertEqual(self.ex.resting(T), [])
 
     def test_start_leaves_orders_on_other_kinds_of_market_alone(self):
+        self.ex.shards[0] = 5000
         self.ex.set_book("FED-26DEC-T3", 40, 60)
         real_client(self.ex).create_order("FED-26DEC-T3", "buy", 2, 30, post_only=True)
         self.ready(self.make_engine())
@@ -628,8 +639,25 @@ class LiveStartTests(EngineLiveCase):
         self.assertIn("position", self.try_to_start())
 
     def test_start_learns_the_balance(self):
-        e = self.ready(self.make_engine())
+        e = self.make_engine()
+        e.cfg.watched_tickers.append(T)
+        self.ready(e)
         self.assertEqual(e.maker.available_cents, 5000)
+
+    def test_start_refuses_when_the_money_is_on_another_exchange(self):
+        # 2026-11-04: all $49.24 on exchange 0, BTC on exchange 2. The total
+        # looks fine, and every order comes back 404.
+        self.ex.shards.update({0: 4924, 2: 0})
+        why = self.try_to_start()
+        self.assertIn("exchange 2", why)
+        self.assertIn("exchange-indexes", why)
+        self.assertEqual(self.ex.writes(), [])
+
+    def test_start_goes_ahead_with_no_money_if_there_are_positions_to_close(self):
+        self.ex.shards.update({0: 4924, 2: 0})
+        ledger.append_fill(T, "yes", "buy", 2, 41, mode="live", liquidity="maker", fee_cents=0, order_id="o", trade_id="t")
+        self.ex.positions[T] = 2.0
+        self.assertTrue(self.make_engine()._prepare_live()[0])
 
 
 class LiveRestartTests(EngineLiveCase):
@@ -819,6 +847,7 @@ class LiveCycleTests(EngineLiveCase):
 
     def test_a_fill_in_a_kind_of_market_the_bot_doesnt_trade_isnt_counted(self):
         e = self.ready(self.make_engine())
+        self.ex.shards[0] = 5000
         self.ex.set_book("FED-26DEC-T3", 40, 60)
         real_client(self.ex).create_order("FED-26DEC-T3", "buy", 2, 60, "immediate_or_cancel")
         e.user_stream.handle(self.ex.ws_message(self.ex.fills[-1]))
@@ -954,6 +983,7 @@ class PositionCheckTests(EngineLiveCase):
 
     def test_the_balance_stays_current(self):
         e = self.ready(self.make_engine())
+        self.watch(e)
         self.ex.balance = 1234
         e._last_balance = 0
         e._live_tick()
@@ -961,10 +991,61 @@ class PositionCheckTests(EngineLiveCase):
 
     def test_a_failed_balance_read_keeps_the_last_one(self):
         e = self.ready(self.make_engine())
+        self.watch(e)
         self.ex.read_failures["/portfolio/balance"] = requests.ConnectionError("down")
         e._last_balance = 0
         e._live_tick()
         self.assertEqual(e.maker.available_cents, 5000)
+
+
+class ExchangeFundsTests(EngineLiveCase):
+    """Kalshi checks funds on each market's own exchange, and API orders don't
+    move money between them. The balance it reports is the total."""
+
+    def test_it_can_spend_whats_on_the_markets_exchange_not_the_total(self):
+        self.ex.shards.update({0: 4924, 2: 1000})
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        self.assertEqual(e.maker.available_cents, 1000)
+        self.assertAlmostEqual(e.live_account["balance_usd"], 59.24)
+        self.assertAlmostEqual(e.live_account["spendable_usd"], 10.00)
+
+    def test_an_order_only_the_total_could_pay_for_is_not_sent(self):
+        self.ex.shards.update({0: 4924, 2: 50})     # bid 2 @ 41 needs 82¢ and a fee
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.assertEqual(self.ex.writes(), [])
+        self.assertEqual(e.maker.orders_failed_in_a_row, 0)
+
+    def test_no_orders_until_it_knows_the_markets_exchange(self):
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        del e.market_info[T]["exchange_index"]
+        e._refresh_balance()
+        e.run_cycle()
+        self.assertEqual(self.ex.writes(), [])
+
+    def test_with_no_breakdown_it_uses_the_total(self):
+        self.ex.hide_breakdown = True
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        self.assertEqual(e.maker.available_cents, 5000)
+
+    def test_markets_on_two_exchanges_use_the_smaller_amount(self):
+        self.ex.shards.update({0: 300, 2: 1000})
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.cfg.watched_tickers.append("OTHER")
+        e.market_info["OTHER"] = {"ticker": "OTHER", "close_time": iso(6), "exchange_index": 0}
+        e._refresh_balance()
+        self.assertEqual(e.maker.available_cents, 300)
+
+    def test_the_dashboard_state_shows_it(self):
+        self.ex.shards.update({0: 4924, 2: 0})
+        e = self.make_engine()
+        self.watch(e)
+        self.assertEqual(e.snapshot()["live"]["account"]["spendable_usd"], 0)
 
 
 class PullingEverythingTests(EngineLiveCase):
@@ -1282,6 +1363,18 @@ class LiveCheckTests(unittest.TestCase):
 
     def test_with_no_options_it_sends_nothing(self):
         self.assertEqual(self.run_check(base_url=self.REAL), 0)
+        self.assertEqual(self.ex.writes(), [])
+
+    def test_money_on_another_exchange_fails_and_says_where_to_move_it(self):
+        self.ex.shards.update({0: 4924, 2: 0})
+        self.assertEqual(self.run_check(), 1)
+        self.assertIn("exchange 2", self.output)
+        self.assertIn("exchange-indexes", self.output)
+        self.assertEqual(self.ex.writes(), [])
+
+    def test_it_doesnt_try_orders_the_exchange_cant_pay_for(self):
+        self.ex.shards.update({0: 4924, 2: 0})
+        self.assertEqual(self.run_check("--order", "--take"), 1)
         self.assertEqual(self.ex.writes(), [])
 
     def test_a_fill_stream_that_never_subscribes_is_a_failure(self):

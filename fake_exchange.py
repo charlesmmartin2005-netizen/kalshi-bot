@@ -43,8 +43,8 @@ class FakeResponse:
             raise requests.HTTPError(f"{self.status_code}: {self.text}", response=self)
 
 
-def _error(status, code, message=""):
-    return FakeResponse(status, {"error": {"code": code, "message": message}})
+def _error(status, code, message="", details=None):
+    return FakeResponse(status, {"error": {"code": code, "message": message, **({"details": details} if details else {})}})
 
 
 def _fp(n):
@@ -62,7 +62,9 @@ def taker_fee_cents(price_cents, count):
 
 class FakeExchange:
     def __init__(self, balance_cents=5000):
-        self.balance = balance_cents
+        # Kalshi checks funds per exchange ("shard"), and coin markets are on 2.
+        self.shards = {0: 0, 1: 0, 2: balance_cents, 3: 0}
+        self.hide_breakdown = False      # the docs omit it for subaccount-restricted keys
         self.portfolio_value = 0
         self.orders: dict[str, dict] = {}
         self.fills: list[dict] = []
@@ -84,6 +86,19 @@ class FakeExchange:
         self._ids = 0
 
     # ---- test controls ----------------------------------------------------
+
+    @property
+    def balance(self):
+        """What's on the exchange the coin markets trade on."""
+        return self.shards[2]
+
+    @balance.setter
+    def balance(self, cents):
+        self.shards[2] = cents
+
+    @staticmethod
+    def shard_of(ticker):
+        return 2 if ticker.startswith("KX") else 0
 
     def set_book(self, ticker, bid=None, ask=None, bid_size=100, ask_size=100):
         self.books[ticker] = {"bid": bid, "ask": ask, "bid_size": bid_size, "ask_size": ask_size}
@@ -136,8 +151,12 @@ class FakeExchange:
             if path == "/account/endpoint_costs":
                 return FakeResponse(200, {"default_cost": 10, "endpoint_costs": self.endpoint_costs})
             if path == "/portfolio/balance":
-                return FakeResponse(200, {"balance": self.balance, "balance_dollars": _dollars(self.balance),
-                                          "portfolio_value": self.portfolio_value, "updated_ts": 1793800000})
+                total = sum(self.shards.values())
+                answer = {"balance": total, "balance_dollars": _dollars(total), "portfolio_value": self.portfolio_value,
+                          "updated_ts": 1793800000}
+                if not self.hide_breakdown:
+                    answer["balance_breakdown"] = [{"balance": _dollars(c), "exchange_index": i} for i, c in self.shards.items()]
+                return FakeResponse(200, answer)
             if path == "/portfolio/orders":
                 return self._page(params or {}, self._orders_rows(params or {}), "orders")
             if path == "/portfolio/positions":
@@ -147,6 +166,7 @@ class FakeExchange:
             if path.startswith("/markets/"):
                 ticker = path.rsplit("/", 1)[1]
                 return FakeResponse(200, {"market": {"ticker": ticker, "status": "active", "result": "",
+                                                     "exchange_index": self.shard_of(ticker),
                                                      **self.markets.get(ticker, {})}})
             if path == "/markets":
                 series = (params or {}).get("series_ticker")
@@ -176,7 +196,12 @@ class FakeExchange:
                                           "fill_count": "0.00", "remaining_count": "0.00", "ts_ms": 1793800000000})
             return _error(400, "post_only_cross")
         held_cost = self._order_cost(body["ticker"], side, price, count)
-        if held_cost > self.balance:
+        funds = self.shards[self.shard_of(body["ticker"])]
+        if held_cost > funds and not funds:
+            # Kalshi's real answer on 2026-11-04, for an account with no money on this exchange.
+            return _error(404, "insufficient_shard_balance", "insufficient shard balance",
+                          "Exchange user not found. For Predictions: reference documentation Exchange Sharding documentation.")
+        if held_cost > funds:
             return _error(400, "insufficient_balance")
 
         self._ids += 1
@@ -206,7 +231,7 @@ class FakeExchange:
             order["remaining"] = 0.0
         else:
             order["held"] = round(self._cost(side, price) * order["remaining"])
-            self.balance -= order["held"]
+            self.shards[self.shard_of(body["ticker"])] -= order["held"]
         if self.lose_next_response:
             self.lose_next_response = False
             raise requests.Timeout("read timed out")
@@ -258,7 +283,7 @@ class FakeExchange:
         o = self.orders.get(order_id)
         if not o or o["status"] != "resting" or o["ticker"] != params["market_ticker"]:
             return _error(404, "not_found")
-        self.balance += o["held"]
+        self.shards[self.shard_of(o["ticker"])] += o["held"]
         o["held"] = 0
         reduced = o["remaining"]
         o["remaining"] = 0.0
@@ -273,10 +298,11 @@ class FakeExchange:
         self.positions[order["ticker"]] = after
         if after == 0:
             del self.positions[order["ticker"]]
+        shard = self.shard_of(order["ticker"])
         if is_taker:
-            self.balance -= round(self._cost(order["side"], price) * count) + fee_cents
+            self.shards[shard] -= round(self._cost(order["side"], price) * count) + fee_cents
         else:
-            self.balance -= fee_cents
+            self.shards[shard] -= fee_cents
         self._ids += 1
         now = datetime.now(timezone.utc)
         side = "yes" if order["side"] == "bid" else "no"
@@ -336,7 +362,8 @@ class FakeExchange:
 
     def _market_row(self, ticker):
         book = self.books.get(ticker, {})
-        row = {"ticker": ticker, "status": "active", "result": "", **self.markets.get(ticker, {})}
+        row = {"ticker": ticker, "status": "active", "result": "", "exchange_index": self.shard_of(ticker),
+               **self.markets.get(ticker, {})}
         if book.get("bid") is not None:
             row.update(yes_bid_dollars=_dollars(book["bid"]), yes_bid_size_fp=_fp(book["bid_size"]))
         if book.get("ask") is not None:

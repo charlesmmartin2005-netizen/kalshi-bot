@@ -9,6 +9,11 @@ Read-only. Sends no orders:
 
     python live_check.py
 
+Kalshi checks funds on each market's own exchange, and API orders don't move
+money between exchanges. So the money has to be on the exchange BTC trades on
+(this says which) before any order can work. The order checks don't try until
+it is. Move it at https://kalshi.com/account/exchange-indexes.
+
 Orders. Against Kalshi's demo environment these use mock funds. To use the real
 one, add --real-money, and it asks first:
 
@@ -39,6 +44,7 @@ from kalshi_client import WriteBudget, build_client, top_of_book
 from market_maker import QUOTE_EXPIRY_SECONDS
 
 SERIES = "KXBTCD"
+MOVE_MONEY_AT = "https://kalshi.com/account/exchange-indexes"
 ID_PREFIX = "live-check-"     # so this only ever cleans up its own orders, never the bot's
 ANSWER_FIELDS = ("order_id", "fill_count", "remaining_count", "ts_ms")
 
@@ -155,6 +161,21 @@ def pick_market(r, client):
     r.check(market.get("price_level_structure") in (None, "linear_cent"), "prices move in whole cents, as the bot assumes",
             str(market.get("price_ranges")))
     return market
+
+
+def check_funds(r, client, market) -> bool:
+    """Is there money on the exchange this market trades on?"""
+    r.say("Money on the right exchange")
+    exchange, balance = market.get("exchange_index"), client.get_balance()
+    rows = balance.get("balance_breakdown")
+    if rows is None:
+        r.learned("Kalshi gave no breakdown by exchange for this key")
+        return True
+    on_exchange = {row["exchange_index"]: float(row["balance"]) for row in rows}
+    r.learned("by exchange: " + ", ".join(f"{i}: ${v:.2f}" for i, v in sorted(on_exchange.items())))
+    here = on_exchange.get(exchange, 0)
+    return r.check(here > 0, f"{SERIES} trades on exchange {exchange}, where you have ${here:.2f}",
+                   f"move money there at {MOVE_MONEY_AT} (API orders don't move it for you, the way Kalshi's app does)")
 
 
 # ---- resting orders ------------------------------------------------------------
@@ -329,13 +350,12 @@ def run(argv, client, ws_url, stream_factory, confirm, out, wait_seconds=10.0) -
         return 1
     check_reads(r, client)
     stream = check_fill_stream(r, client.auth, ws_url, stream_factory, wait_seconds)
-    if sends_orders:
-        market = pick_market(r, client)
-        if market:
-            if args.order:
-                check_order(r, client, market)
-            if args.take:
-                check_take(r, client, market, stream, wait_seconds)
+    market = pick_market(r, client)
+    if market and check_funds(r, client, market):
+        if args.order:
+            check_order(r, client, market)
+        if args.take:
+            check_take(r, client, market, stream, wait_seconds)
     r.say()
     r.say("Every check passed." if not r.failures else f"{r.failures} check(s) failed. Don't go live until they're explained.")
     return 1 if r.failures else 0
