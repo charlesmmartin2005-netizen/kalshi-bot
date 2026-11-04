@@ -1,9 +1,10 @@
 # Kalshi trading bot
 
-A paper-trading bot for Kalshi with three strategies, a scanner that covers
-every open market, and a local dashboard. It defaults to **paper trading**:
-no orders are sent, and fills are simulated from each market's real public
-trade tape and recorded in `fills_log.jsonl`.
+A trading bot for Kalshi with three strategies, a scanner that covers every
+open market, and a local dashboard. It defaults to **paper trading**: no orders
+are sent, and fills are simulated from each market's real public trade tape and
+recorded in `fills_log.jsonl`. It can also trade real money: see
+["Going live"](#going-live).
 
 ## Strategies
 
@@ -58,10 +59,12 @@ Or double-click `start-dashboard.bat`, or:
 .venv\Scripts\python.exe simulate.py T1 T2 --days 14   # old vs new rules, 2,000 futures
 .venv\Scripts\python.exe show_pnl.py      # P&L report from the ledger
 .venv\Scripts\python.exe research\paper_markouts.py --since 2026-10-22   # is the paper edge real?
+.venv\Scripts\python.exe live_check.py     # does Kalshi's real API answer as the live path expects? (read-only)
+.venv\Scripts\python.exe -m unittest test_live test_settlement test_dashboard_data   # the tests
 ```
 
 Paper mode needs no API key. To trade live you need a key in `.env`, and
-you should read "Before going live" first.
+you should read "Going live" first.
 
 ## Run unattended
 
@@ -140,9 +143,9 @@ ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 | `strategy.py` | Pure quoting logic, shared by the bot and the simulator |
 | `fair_value.py` | Crypto model (tradeable) and NWS temperature model (display only) |
 | `fees.py` | Kalshi's quadratic fee formula |
-| `risk_manager.py` | Allowed sides, loss breakers, kill switch |
-| `market_maker.py` | Order sync, takes, and paper fills from the trade tape |
-| `engine.py` | The main loop (shared by `main.py` and the dashboard) |
+| `risk_manager.py` | Allowed sides, loss breakers, kill switch, positions after a restart |
+| `market_maker.py` | Order sync, takes, paper fills from the trade tape, and live orders and fills |
+| `engine.py` | The main loop (shared by `main.py` and the dashboard); live, the start checks and the comparison with Kalshi |
 | `catalog.py` | One cached sweep of every open event (~14k events, ~30s) |
 | `sweep.py` | The dashboard's Scanner sweep (scanner + arbitrage), run in its own process every 5 minutes |
 | `scanner.py` / `arb.py` | Market ranking / arbitrage detection over the catalog |
@@ -150,8 +153,8 @@ ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 | `backtest.py` | Minute-by-minute replay of the fair-value strategy on settled BTC daily markets, with markouts |
 | `ledger.py` / `pnl.py` | Fill log and average-cost, settlement-aware P&L |
 | `price_bars.py` | Long price charts: the model's one-minute bars on disk (`price_bars/`), merged with Kalshi's candles when a chart asks |
-| `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429 |
-| `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) and the Kalshi websocket (needs an API key) |
+| `kalshi_client.py` | REST client, request throttle (10/s) and retry on 429. Orders and cancels skip both and have their own budget (`WriteBudget`) |
+| `feeds.py` | Streaming BTC/ETH index (Coinbase, Kraken, Bitstamp, Gemini websockets) the Kalshi websocket (needs an API key), and our own fills (`UserStream`, live only) |
 | `dashboard.py` + `static/index.html` | Local web dashboard: Overview (today, settlement payout), Ladder, Edge (markouts vs history), Activity (ledger, settings, log), Scanner |
 | `markouts.py` | Scores fills by how the market moved 1, 5 and 60 minutes later (Edge view, `research/paper_markouts.py`) |
 | `run-bot.ps1` / `stop-bot.ps1` | Keep the dashboard running unattended (restart loop) / stop it |
@@ -160,6 +163,8 @@ ssh kalshi-bot "tail -f kalshi-bot/logs/bot.log"                # its log
 | `server-dashboard.ps1` | Opens the server bot's dashboard in the default browser, through an SSH tunnel |
 | `static/icon*`, `static/manifest.json` | App icon and web manifest |
 | `autopick.py` | Chooses the strikes to watch (Auto-pick button / auto-rotate) |
+| `live_check.py` | Tries the live path against Kalshi's real API: read-only, or with one small order |
+| `test_live.py` / `fake_exchange.py` | Tests of the live path / a stand-in for Kalshi's REST API that follows its docs |
 | `research/strategy_lab.py` | Strategy comparison over cached months of real data (not used by the bot) |
 | `research/paper_markouts.py` | Scores every paper fill by how the market moved 1, 5 and 60 minutes later, net of fees |
 | `research/index_check.py` | Exchanges vs Kalshi's real settlement values |
@@ -221,27 +226,118 @@ Details and numbers in `research/README.md`.
 - **Makers pay no fee** on KXBTCD/KXETHD (kalshi.com/fee-schedule); the bot
   had charged them the taker rate.
 
-## Before going live
+## Going live
 
-- `create_order` targets Kalshi's V2 order endpoint, and its schema has
-  **not** been verified against a real response. Test with one contract.
-- Live fills are not recorded yet (`TODO(live)` in `market_maker.py`).
-  Paper fills are.
-- Maker fills are free on KXBTCD/KXETHD (fee schedule checked 2026-10-22).
-  Series on Kalshi's maker-fee list charge 0.0175; set
-  `KALSHI_MAKER_FEE_RATE` if you trade one.
-- Judge paper trading with `research/paper_markouts.py`, not daily P&L:
-  takes should beat the fee 5 minutes later and maker fills shouldn't lose.
-  All strikes settle on one BTC price a day, so P&L needs months to mean
-  anything; markouts need about a week.
-- Kalshi's websocket needs an API key. Without one the bot polls the book
-  every 0.4s, and the take edge halves within a second.
-- Paper-trade the fair-value strategy for a while first. Its edge is speed,
-  which hourly history can't backtest.
-- The Kalshi websocket client (`feeds.KalshiStream`) has never been run,
-  because there was no API key when it was written. Watch "Kalshi data" on
-  the dashboard after adding a key. If the stream fails, the bot falls back
-  to REST.
-- Repricing on every tick means many cancel/replace orders. Check Kalshi's
-  write rate limit, and add a minimum time between requotes per market,
-  before sending real orders.
+Live mode is built, but **it hasn't sent a real order yet**. `test_live.py`
+tests it against a fake exchange that follows Kalshi's docs as read on
+2026-11-04. `live_check.py` is what tries the real API, and on 2026-11-04 only
+its read-only part had been run: balance, positions, orders, fills, order costs
+and the fill stream all answered as expected.
+
+### What's different when it's live
+
+- **Sizes:** 2 contracts where paper trades 15, with the limits scaled to match
+  (`live_risk()` in `config.py`): 10 per market, $40 total exposure, $20 daily
+  loss, $8 per market. Paper keeps its own numbers. Raise these only together
+  with the balance. The strategy itself is the same as paper's.
+- **Takes** are immediate-or-cancel, so a miss never rests on the book.
+- **Quotes** are post-only and expire after 60 seconds, so a dead bot can't leave
+  them up for long. One stays put until its price should move 2¢ or it reaches
+  15 seconds old. Paper still follows every cent.
+- **Positions come from Kalshi.** A take is booked from its own answer, everything
+  else from the fill stream, each fill once, with the fee Kalshi charged.
+- **Before every start** it cancels orders left by a previous run, books any fills
+  it missed, and refuses to start if positions don't match Kalshi's or it can't
+  read the balance.
+- **While running** it compares positions and resting orders with Kalshi's every
+  15 seconds and cancels any order it isn't tracking.
+- **It pulls its quotes and stops trading** while it can't see fills, until the
+  stream is back and it has caught up.
+- **It halts** (kill switch, survives restarts, cancels everything of ours on
+  Kalshi) on the daily loss limit, 5 failed orders in a row, a position that
+  differs from Kalshi's on two checks in a row, or 5 failed checks in a row.
+- **The daily loss limit survives a restart** (`risk_day.json`).
+- **No order goes out** that the account can't pay for, or past Kalshi's limit on
+  orders per second. Quotes leave room in that limit for takes.
+- **The dashboard** shows Kalshi's balance, and only live fills. Paper and live
+  rows share `fills_log.jsonl` and never mix. Profit is measured from
+  `KALSHI_LIVE_START_USD`, so update it if you deposit or withdraw.
+- **Only coin markets**, so nothing from elsewhere on your account gets traded or
+  counted.
+
+### The steps
+
+**1. Try it on Kalshi's demo environment, with mock funds.** Make an account at
+demo.kalshi.co and a demo API key (real keys don't work there). In a `.env` on
+the PC:
+
+```
+KALSHI_BASE_URL=https://external-api.demo.kalshi.co/trade-api/v2
+KALSHI_WS_URL=wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2
+KALSHI_API_KEY_ID=your-demo-key-id
+KALSHI_PRIVATE_KEY_PATH=./kalshi_demo_key.pem
+KALSHI_PAPER_TRADING=false
+```
+
+Then run these, and fix whatever they report:
+
+```
+.venv\Scripts\python.exe live_check.py --order
+.venv\Scripts\python.exe live_check.py --take
+.venv\Scripts\python.exe dashboard.py
+```
+
+Leave the dashboard running for a while, and restart it with positions open.
+Demo prices don't behave like real ones, so this tests the plumbing and says
+nothing about the edge. Afterwards delete the PC's `.env` and `risk_day.json`.
+
+**2. Send the code to the server.** It's still in paper mode, and paper trades as
+before.
+
+```
+powershell -ExecutionPolicy Bypass -File deploy-server.ps1
+```
+
+**3. Try the real API.** The first command sends nothing. The others send real
+orders, need `--real-money`, and ask first. `--take` costs about 5¢.
+
+```
+ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py"
+ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --order --real-money"
+ssh -t kalshi-bot "cd kalshi-bot && .venv/bin/python live_check.py --take --real-money"
+```
+
+These also answer what the docs leave open: whether resting orders hold money
+(the check reports it; if they do, the dashboard's total dips by what quotes
+hold), what a post-only order that would cross does, and the error for too little
+money. A key that can only read gets a 403 here.
+
+**4. Go live.** Make sure the PC's bot is off (only one bot can trade). On the
+server, in `~/kalshi-bot/.env`, set `KALSHI_PAPER_TRADING=false` and
+`KALSHI_LIVE_START_USD` to your balance, then:
+
+```
+ssh kalshi-bot "sudo systemctl restart kalshi-bot"
+```
+
+**Expect a halt in Kalshi's maintenance windows.** Orders fail while the exchange is
+down, and 5 failures in a row halt the bot. Nothing happens to it after that until
+you reset the kill switch and press start, which runs the start checks again.
+
+**To stop:** use the dashboard's kill switch, which cancels everything. Stopping
+the service works too, and quotes then expire within 60 seconds. Neither closes
+open positions: those stay until you close them on Kalshi or they settle.
+
+**To go back to paper:** set `KALSHI_PAPER_TRADING=true` and restart. Paper mode
+doesn't see live positions, so close them on Kalshi first.
+
+### Judging it
+
+- Judge results with `research/paper_markouts.py`, not daily P&L: takes should beat
+  the fee 5 minutes later and maker fills shouldn't lose. All strikes settle on one
+  BTC price a day, so P&L needs months to mean anything; markouts need about a
+  week. As of 2026-11-04 it has 5 settled days on the current rules.
+- Paper assumes every take fills instantly at the shown price. Comparing real fills
+  with that is the main thing a small live account teaches.
+- Maker fills are free on KXBTCD/KXETHD (fee schedule checked 2026-10-22). Live P&L
+  uses what Kalshi charged either way.

@@ -37,13 +37,14 @@ class RiskManager:
         self._day_start_pnl_usd = 0.0
         self.session_pnl_usd = 0.0
         self.daily_pnl_usd = 0.0
+        self.on_new_day = None                         # called when the daily P&L starts over
 
     # ---- state updates ------------------------------------------------
 
     def record_fill(self, ticker: str, side: str, action: str, count: int, price_cents: int,
-                    maker: bool = True):
+                    maker: bool = True, fee_cents: float | None = None):
         pos = self.positions.setdefault(ticker, MarketLedger(ticker))
-        pos.apply_fill(side, action, count, price_cents, maker)
+        pos.apply_fill(side, action, count, price_cents, maker, fee_cents)
         log.info("Fill recorded: %s %s %s %d @ %d¢ (%s) -> net position %d",
                  ticker, action, side, count, price_cents, "maker" if maker else "taker",
                  pos.net_contracts)
@@ -65,6 +66,8 @@ class RiskManager:
         self.session_pnl_usd = sum(self.market_pnl_usd(t) for t in self.positions)
         if today != self._day:
             self._day, self._day_start_pnl_usd = today, self.session_pnl_usd
+            if self.on_new_day:
+                self.on_new_day()
         self.daily_pnl_usd = self.session_pnl_usd - self._day_start_pnl_usd
 
         if not self.halted and self.daily_pnl_usd <= -self.cfg.max_daily_loss_usd:
@@ -94,6 +97,33 @@ class RiskManager:
             if ml.net_contracts and not is_settled(t):
                 self.positions[t] = ml
         return {t: ml.net_contracts for t, ml in self.positions.items() if ml.net_contracts}
+
+    def restore_live(self, fills: list, settlement) -> dict[str, int]:
+        """Rebuild from the ledger's live rows, keeping every market's ledger,
+        flat and settled ones too: session P&L is a sum over them, and the
+        daily limit measures from it (resume_day). settlement(ticker) ->
+        (final, price_cents, result). Returns {ticker: net contracts}."""
+        for f in fills:
+            ml = self.positions.setdefault(f["ticker"], MarketLedger(f["ticker"]))
+            ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"],
+                          f.get("liquidity", "maker") == "maker", f.get("fee_cents"))
+        for t, ml in self.positions.items():
+            if ml.net_contracts:
+                final, price, result = settlement(t)
+                if final:
+                    ml.settle(price, result)
+        return {t: ml.net_contracts for t, ml in self.positions.items() if ml.net_contracts}
+
+    def day_state(self) -> dict:
+        return {"day": self._day.isoformat(), "start_pnl_usd": self._day_start_pnl_usd}
+
+    def resume_day(self, saved: dict | None):
+        """Carry on today's daily P&L from day_state() saved before a restart.
+        With nothing saved for today, it starts here."""
+        if saved and saved.get("day") == self._day.isoformat():
+            self._day_start_pnl_usd = saved["start_pnl_usd"]
+        else:
+            self._day_start_pnl_usd = sum(self.market_pnl_usd(t) for t in self.positions)
 
     def settle(self, ticker: str, price_cents: int, result: str) -> int:
         """A finalized market's position is over: book what it paid as realized

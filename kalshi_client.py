@@ -9,15 +9,58 @@ import os
 import time
 import logging
 import threading
+import uuid
+from datetime import datetime
+
 import requests
 
 from auth import KalshiAuth
 
 log = logging.getLogger("kalshi_client")
 
+# The engine holds its lock while an order is out, so a hung order must not
+# freeze it for a read's full timeout.
+ORDER_TIMEOUT_SECONDS = 3.0
+
 
 class KalshiRateLimitError(Exception):
     pass
+
+
+class WriteBudget:
+    """Stays inside Kalshi's limit on orders and cancels. A Basic account gets 100
+    tokens a second, refilling continuously, and can't bank more than one
+    second's worth; an order costs 10 and a cancel 2 (docs read 2026-11-04). This
+    runs at 80, so a misjudged cost doesn't turn into 429s on a take."""
+    ORDER = 10
+    CANCEL = 2
+
+    def __init__(self, rate: float = 80.0, clock=time.monotonic):
+        self.rate = rate
+        self.clock = clock
+        self.tokens = rate
+        self._last = clock()
+
+    def _refill(self):
+        now = self.clock()
+        self.tokens = min(self.rate, self.tokens + (now - self._last) * self.rate)
+        self._last = now
+
+    def can_spend(self, cost: float, keep: float = 0) -> bool:
+        self._refill()
+        return self.tokens - cost >= keep
+
+    def spend(self, cost: float, keep: float = 0) -> bool:
+        """Take `cost` tokens if that leaves at least `keep`."""
+        if not self.can_spend(cost, keep):
+            return False
+        self.tokens -= cost
+        return True
+
+    def owe(self, cost: float):
+        """Spend regardless: a cancel always goes out."""
+        self._refill()
+        self.tokens -= cost
 
 
 class KalshiAuthMissing(Exception):
@@ -78,21 +121,27 @@ class KalshiClient:
             time.sleep(wait)
 
     def _request(self, method: str, path: str, params: dict = None, json_body: dict = None,
-                  authenticated: bool = True):
+                  authenticated: bool = True, write: bool = False, missing_ok: bool = False):
+        """write: an order or cancel. Kalshi meters writes in their own bucket,
+        so they don't wait behind market-data requests, and a 429 isn't retried:
+        an order sent again seconds later is at a price from seconds ago.
+        missing_ok: a 404 is an answer ({}), not an error."""
         url = f"{self.base_url}{path}"
         if authenticated and self.auth is None:
             raise KalshiAuthMissing(
                 f"{method} {path} needs an API key — set KALSHI_API_KEY_ID and "
                 "KALSHI_PRIVATE_KEY_PATH in .env")
 
-        for attempt in range(self.RATE_LIMIT_RETRIES + 1):
-            self._wait_for_slot()
+        for attempt in range(1 if write else self.RATE_LIMIT_RETRIES + 1):
+            if not write:
+                self._wait_for_slot()
             headers = {"Content-Type": "application/json"}
             if authenticated:   # sign after waiting, so the timestamp is fresh
                 headers.update(self.auth.sign_request(method, f"/trade-api/v2{path}"))
             try:
                 resp = self._session.request(
-                    method, url, params=params, json=json_body, headers=headers, timeout=self.timeout
+                    method, url, params=params, json=json_body, headers=headers,
+                    timeout=ORDER_TIMEOUT_SECONDS if write else self.timeout
                 )
             except requests.RequestException as e:
                 self._consecutive_errors += 1
@@ -100,7 +149,7 @@ class KalshiClient:
                 raise
             if resp.status_code != 429:
                 break
-            if attempt < self.RATE_LIMIT_RETRIES:
+            if not write and attempt < self.RATE_LIMIT_RETRIES:
                 time.sleep(0.5 * 2 ** attempt)
 
         if resp.status_code == 429:
@@ -108,6 +157,8 @@ class KalshiClient:
             log.warning("Rate limited on %s %s after %d retries", method, path, self.RATE_LIMIT_RETRIES)
             raise KalshiRateLimitError(f"429 on {method} {path}")
 
+        if missing_ok and resp.status_code == 404:
+            return {}
         if resp.status_code >= 400:
             self._consecutive_errors += 1
             log.error("HTTP %s on %s %s: %s", resp.status_code, method, path, resp.text[:500])
@@ -165,86 +216,79 @@ class KalshiClient:
 
     # ---- trading (authenticated) ------------------------------------------
 
+    def _all_pages(self, path: str, key: str, params: dict) -> list:
+        rows, cursor = [], None
+        while True:
+            page = self._request("GET", path, params={**params, **({"cursor": cursor} if cursor else {})})
+            rows.extend(page.get(key, []))
+            cursor = page.get("cursor")
+            if not cursor:
+                return rows
+
+    def get_endpoint_costs(self) -> dict:
+        """{default_cost, endpoint_costs: [{method, path, cost}]}, in rate-limit tokens."""
+        return self._request("GET", "/account/endpoint_costs")
+
     def get_balance(self) -> dict:
+        """{balance (available, cents), portfolio_value (cents), ...}."""
         return self._request("GET", "/portfolio/balance")
 
-    def get_positions(self) -> dict:
-        return self._request("GET", "/portfolio/positions")
+    def get_positions(self) -> dict[str, float]:
+        """Every open position on Kalshi: {ticker: net contracts}, positive
+        for YES and negative for NO. Markets not yet settled only."""
+        rows = self._all_pages("/portfolio/positions", "market_positions", {"count_filter": "position", "limit": 200})
+        return {r["ticker"]: float(r["position_fp"]) for r in rows if float(r["position_fp"])}
 
     def get_orders(self, ticker: str = None, status: str = None) -> dict:
-        params = {}
+        params = {"limit": 200}
         if ticker:
             params["ticker"] = ticker
         if status:
             params["status"] = status
-        return self._request("GET", "/portfolio/orders", params=params)
+        return {"orders": self._all_pages("/portfolio/orders", "orders", params)}
 
-    def create_order(self, ticker: str, side: str, action: str, count: int, price_cents: int,
-                      order_type: str = "limit", client_order_id: str = None) -> dict:
-        """
-        !!! VERIFY BEFORE FIRST USE !!!
-        Kalshi is migrating order placement to a V2 endpoint
-        (/portfolio/events/orders) with a different schema than the legacy
-        /portfolio/orders endpoint this method previously assumed. Per
-        Kalshi's docs, the legacy endpoint is being deprecated. The
-        implementation below reflects the V2 shape found in Kalshi's
-        current docs as of this writing:
+    def get_fills(self, min_ts: float = None) -> list[dict]:
+        """Our fills (normalize_fill's shape), from min_ts on."""
+        params = {"limit": 200, **({"min_ts": int(min_ts)} if min_ts else {})}
+        return [normalize_fill(r) for r in self._all_pages("/portfolio/fills", "fills", params)]
 
-            POST /trade-api/v2/portfolio/events/orders
-            {
-              "ticker": "...",
-              "client_order_id": "...",
-              "side": "bid" | "ask",       # NOT "yes"/"no" — single book side
-              "count": "10.00",             # string, contract count
-              "price": "0.5600",            # string, DOLLARS not cents
-              "time_in_force": "good_till_canceled",
-              ...
-            }
+    def create_order(self, ticker: str, action: str, count: float, price_cents: int,
+                     time_in_force: str = "good_till_canceled", post_only: bool = False,
+                     expires_at: int = None, client_order_id: str = None) -> dict:
+        """POST /portfolio/events/orders (Create Order V2, docs read 2026-11-04;
+        live_check.py tries it for real). The book is YES-only: "bid" buys YES,
+        "ask" sells YES, which is the same as buying NO at 1 - price. Counts and
+        prices are strings, prices in dollars.
 
-        Given the read-side field names were already wrong once in this
-        project, do NOT trust this blindly — confirm the exact current
-        schema at https://docs.kalshi.com/api-reference/orders/create-order-v2
-        before sending a real order, ideally by first hitting it from a
-        script with a tiny throwaway order on a cheap/illiquid market and
-        inspecting the response, the same way we debugged the orderbook.
+        Answers {order_id, client_order_id, fill_count, remaining_count, ts_ms},
+        plus average_fill_price and average_fee_paid (per contract) if anything
+        filled.
 
-        side: "yes" or "no" (translated to bid/ask below)
-        action: "buy" or "sell"
-        price_cents: limit price in whole cents (1-99) — converted to a
-                     dollar string internally
-        """
-        # Kalshi's V2 side is "bid"/"ask" per the single order book, not
-        # yes/no directly. A yes-buy or no-sell is a "bid" on the relevant
-        # side; translate carefully — VERIFY this mapping against the docs
-        # before live use, this is a best-effort translation, not confirmed
-        # against a real response.
-        book_side = "bid" if action == "buy" else "ask"
-        price_dollars = f"{price_cents / 100:.4f}"
-
+        self_trade_prevention_type "maker": if a take meets our own resting
+        quote, that quote is cancelled and the take carries on."""
         body = {
             "ticker": ticker,
-            "client_order_id": client_order_id or str(__import__("uuid").uuid4()),
-            "side": book_side,
+            "client_order_id": client_order_id or str(uuid.uuid4()),
+            "side": "bid" if action == "buy" else "ask",
             "count": f"{count:.2f}",
-            "price": price_dollars,
-            "time_in_force": "good_till_canceled",
+            "price": f"{price_cents / 100:.4f}",
+            "time_in_force": time_in_force,
+            "self_trade_prevention_type": "maker",
         }
-        return self._request("POST", "/portfolio/events/orders", json_body=body)
+        if post_only:
+            body["post_only"] = True
+        if time_in_force == "good_till_canceled":
+            body["cancel_order_on_pause"] = True
+        if expires_at is not None:
+            body["expiration_time"] = int(expires_at)
+        return self._request("POST", "/portfolio/events/orders", json_body=body, write=True)
 
-    def cancel_order(self, order_id: str) -> dict:
-        return self._request("DELETE", f"/portfolio/orders/{order_id}")
-
-    def cancel_all_orders(self, ticker: str = None) -> list:
-        """Not a native single endpoint — fetches resting orders and cancels
-        each. Used by the kill switch to flatten quoting quickly."""
-        open_orders = self.get_orders(ticker=ticker, status="resting").get("orders", [])
-        results = []
-        for order in open_orders:
-            try:
-                results.append(self.cancel_order(order["order_id"]))
-            except Exception as e:
-                log.error("Failed to cancel order %s: %s", order.get("order_id"), e)
-        return results
+    def cancel_order(self, order_id: str, ticker: str) -> dict:
+        """DELETE /portfolio/events/orders/{id}. Kalshi can't find the shard
+        from the order ID alone, so the ticker goes with it. {} if the order is
+        already gone (it filled, expired or was cancelled)."""
+        return self._request("DELETE", f"/portfolio/events/orders/{order_id}",
+                             params={"market_ticker": ticker}, write=True, missing_ok=True)
 
 
 def build_client(config) -> KalshiClient:
@@ -265,6 +309,33 @@ def dollars_to_cents(value) -> int | None:
     if value in (None, ""):
         return None
     return round(float(value) * 100)
+
+
+def whole(x: float):
+    return int(x) if x == int(x) else x
+
+
+def normalize_fill(row: dict) -> dict:
+    """One of our fills from GET /portfolio/fills or the `fill` websocket
+    channel, in the ledger's terms. A book_side of "bid" bought YES and "ask"
+    sold it, and the price is always the YES price. Raises KeyError or
+    ValueError rather than guess at a fill it can't read."""
+    if row.get("ts_ms"):
+        ts = row["ts_ms"] / 1000
+    else:
+        ts = row["ts"] if row.get("ts") else datetime.fromisoformat(row["created_time"].replace("Z", "+00:00")).timestamp()
+    return {
+        "trade_id": row["trade_id"],
+        "order_id": row["order_id"],
+        "client_order_id": row.get("client_order_id"),
+        "ticker": row.get("market_ticker") or row["ticker"],
+        "action": {"bid": "buy", "ask": "sell"}[row["book_side"]],
+        "count": whole(round(float(row["count_fp"]), 2)),
+        "price_cents": whole(round(float(row["yes_price_dollars"]) * 100, 2)),
+        "maker": not row["is_taker"],
+        "fee_cents": whole(round(float(row["fee_cost"]) * 100, 4)),
+        "ts": ts,
+    }
 
 
 def normalize_orderbook(raw_orderbook: dict) -> dict:

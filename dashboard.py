@@ -153,7 +153,7 @@ def _settled_by(ticker, since):
 def _today_usd(fills, equity_usd):
     """Equity now minus the account at midnight ET (pnl.pnl_since)."""
     since = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    return pnl.pnl_since(fills, since, equity_usd, _settled_by)
+    return pnl.pnl_since(fills, since, equity_usd, _settled_by, pnl.starting_balance(CONFIG.kalshi))
 
 
 # The dashboard's P&L bars: the last 1/7/30 days, 1/4/12 weeks, 1/3/6 months.
@@ -162,7 +162,8 @@ PERIOD_DAYS = (1, 7, 28, 30, 84, 91, 182)
 
 def _period_usd(fills, equity_usd):
     now = time.time()
-    return {str(d): pnl.pnl_since(fills, now - d * 86400, equity_usd, _settled_by) for d in PERIOD_DAYS}
+    return {str(d): pnl.pnl_since(fills, now - d * 86400, equity_usd, _settled_by, pnl.starting_balance(CONFIG.kalshi))
+            for d in PERIOD_DAYS}
 
 
 def _pnl_summary():
@@ -170,11 +171,14 @@ def _pnl_summary():
         ts, value = _cache["pnl"]
         if value is not None and time.time() - ts < PNL_TTL:
             return value
-    fills = ledger.read_all_fills()
-    s = pnl.compute(client=engine.client, fills=fills, get_marks=_marks)
+    fills = ledger.read_fills(CONFIG.kalshi.mode_name)
+    s = pnl.compute(client=engine.client, fills=fills, get_marks=_marks, start_usd=pnl.starting_balance(CONFIG.kalshi))
+    # Live, the money is what Kalshi says. P&L still comes from the fills, so a
+    # deposit doesn't read as profit.
+    account = None if CONFIG.kalshi.paper_trading else engine.live_account
     value = {
-        "balance_usd": s["balance_usd"],
-        "equity_usd": s["equity_usd"],
+        "balance_usd": account["balance_usd"] if account else s["balance_usd"],
+        "equity_usd": account["balance_usd"] + account["portfolio_value_usd"] if account else s["equity_usd"],
         "starting_balance_usd": s["starting_balance_usd"],
         "net_usd": s["net_usd"],
         "realized_usd": s["realized_usd"],
@@ -295,7 +299,7 @@ _candles = price_bars.CandleCache()
 
 @app.get("/api/fills")
 def all_fills():
-    return jsonify({"fills": ledger.read_all_fills()[::-1]})
+    return jsonify({"fills": ledger.read_fills(CONFIG.kalshi.mode_name)[::-1]})
 
 
 @app.get("/api/history/<ticker>")
@@ -305,7 +309,7 @@ def price_history(ticker):
         return jsonify({"ok": False, "msg": "Not a market ticker"}), 400
     since = request.args.get("since", 0, type=int)
     rows = price_bars.rows(_candles.get(SWEEP_CLIENT, ticker), engine.bars.read(ticker, since), since)
-    return jsonify({"rows": rows, "fills": [f for f in ledger.read_all_fills() if f["ticker"] == ticker]})
+    return jsonify({"rows": rows, "fills": [f for f in ledger.read_fills(CONFIG.kalshi.mode_name) if f["ticker"] == ticker]})
 
 
 # ---- today's markouts (Edge view) -------------------------------------------
@@ -319,8 +323,7 @@ _mk ={"ts": 0.0, "value": None, "running": False, "settled": {}}
 def _refresh_markouts():
     try:
         since = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        mode = "paper" if CONFIG.kalshi.paper_trading else "live"
-        fills = [f for f in ledger.read_all_fills() if f.get("mode", "paper") == mode and f["ts"] >= since]
+        fills = [f for f in ledger.read_fills(CONFIG.kalshi.mode_name) if f["ts"] >= since]
         scored = markouts.score(SWEEP_CLIENT, fills, _mk["settled"])
         takes = [f for f in scored if f.get("liquidity") == "taker" and f.get("edge_cents") is not None]
         _mk["value"] = {"since": since, "fills": len(fills), "horizons": list(markouts.HORIZONS),

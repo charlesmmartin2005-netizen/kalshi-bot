@@ -37,9 +37,11 @@ class MarketLedger:
         self.mark_cents = None
         self.unrealized_pnl_cents = 0.0
 
-    def apply_fill(self, side, action, count, price_cents, maker=True):
+    def apply_fill(self, side, action, count, price_cents, maker=True, fee_cents=None):
+        """fee_cents: what Kalshi really charged (live fills). Paper fills use
+        the fee formula."""
         self.fill_count += 1
-        self.total_fees_cents += order_fee_cents(price_cents, count, maker)
+        self.total_fees_cents += order_fee_cents(price_cents, count, maker) if fee_cents is None else fee_cents
 
         # Normalize everything to "yes exposure": buying yes or selling no
         # increases yes exposure; selling yes or buying no decreases it.
@@ -56,7 +58,7 @@ class MarketLedger:
             # Adding to (or opening) a position in the same direction —
             # update average cost, no realized P&L yet.
             total_cost = self.avg_cost_cents * abs(self.net_contracts) + fill_price * abs(delta)
-            self.net_contracts += delta
+            self.net_contracts = round(self.net_contracts + delta, 2)   # live fills can be part of a contract
             if self.net_contracts != 0:
                 self.avg_cost_cents = total_cost / abs(self.net_contracts)
         else:
@@ -68,7 +70,7 @@ class MarketLedger:
             else:
                 # Was short yes (long no), now buying yes back.
                 self.realized_pnl_cents += closing * (self.avg_cost_cents - fill_price)
-            self.net_contracts += delta
+            self.net_contracts = round(self.net_contracts + delta, 2)
             if abs(delta) > closing:
                 # Flipped past zero into the opposite direction.
                 self.avg_cost_cents = fill_price
@@ -114,7 +116,11 @@ def _is_maker(fill: dict) -> bool:
     return fill.get("liquidity", "maker") == "maker"
 
 
-def compute(client=None, fills=None, get_marks=None) -> dict:
+def starting_balance(kalshi_config) -> float:
+    return STARTING_BALANCE_USD if kalshi_config.paper_trading else kalshi_config.live_starting_balance_usd
+
+
+def compute(client=None, fills=None, get_marks=None, start_usd=STARTING_BALANCE_USD) -> dict:
     """Replay the ledger into per-market ledgers and portfolio totals. Pass
     a client to book settlements for open positions in resolved markets, and
     get_marks(tickers) -> {ticker: mid_cents} to value the positions still
@@ -126,7 +132,7 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
     by_ticker: dict[str, MarketLedger] = {}
     for f in fills:
         ml = by_ticker.setdefault(f["ticker"], MarketLedger(f["ticker"]))
-        ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"], _is_maker(f))
+        ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"], _is_maker(f), f.get("fee_cents"))
 
     if client is not None:
         for ticker, ml in by_ticker.items():
@@ -150,7 +156,7 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
     fees = sum(ml.total_fees_cents for ml in by_ticker.values())
     net_usd = (realized - fees) / 100
     unrealized_usd = sum(ml.unrealized_pnl_cents for ml in by_ticker.values()) / 100
-    equity_usd = STARTING_BALANCE_USD + net_usd + unrealized_usd
+    equity_usd = start_usd + net_usd + unrealized_usd
 
     # Equity curve: balance after each fill, for the dashboard chart. Uses
     # trade-level realized P&L only (there's no price history for the open
@@ -158,7 +164,7 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
     curve, running = [], MarketLedgerSet()
     for f in fills:
         running.apply(f)
-        curve.append({"ts": f["ts"], "balance": STARTING_BALANCE_USD + running.net_usd()})
+        curve.append({"ts": f["ts"], "balance": start_usd + running.net_usd()})
     if curve and abs(curve[-1]["balance"] - equity_usd) > 1e-9:
         curve.append({"ts": time.time(), "balance": equity_usd})
 
@@ -170,14 +176,14 @@ def compute(client=None, fills=None, get_marks=None) -> dict:
         "unrealized_usd": unrealized_usd,
         "unmarked": unmarked,
         "equity_usd": equity_usd,
-        "starting_balance_usd": STARTING_BALANCE_USD,
-        "balance_usd": STARTING_BALANCE_USD + net_usd,
+        "starting_balance_usd": start_usd,
+        "balance_usd": start_usd + net_usd,
         "fill_count": len(fills),
         "equity_curve": curve,
     }
 
 
-def pnl_since(fills, since, equity_usd, settled_by) -> float:
+def pnl_since(fills, since, equity_usd, settled_by, start_usd=STARTING_BALANCE_USD) -> float:
     """Equity now minus the account at `since`: the fills before it, plus
     the settlement of every market that had closed by then. (The equity
     curve can't give this: it books settlements at its end.)
@@ -189,7 +195,7 @@ def pnl_since(fills, since, equity_usd, settled_by) -> float:
             if settled:
                 ml.settle(*settled)
     base = sum(ml.realized_pnl_cents - ml.total_fees_cents for ml in start["markets"]) / 100
-    return round(equity_usd - (STARTING_BALANCE_USD + base), 2)
+    return round(equity_usd - (start_usd + base), 2)
 
 
 def settlement_bands(positions) -> list:
@@ -215,7 +221,7 @@ class MarketLedgerSet:
 
     def apply(self, f):
         ml = self.ledgers.setdefault(f["ticker"], MarketLedger(f["ticker"]))
-        ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"], _is_maker(f))
+        ml.apply_fill(f["side"], f["action"], f["count"], f["price_cents"], _is_maker(f), f.get("fee_cents"))
 
     def net_usd(self):
         return sum(ml.realized_pnl_cents - ml.total_fees_cents for ml in self.ledgers.values()) / 100

@@ -21,15 +21,27 @@ class KalshiConfig:
     private_key_path: str = os.getenv("KALSHI_PRIVATE_KEY_PATH", "./kalshi_private_key.pem")
 
     # --- Endpoints ---
-    # Verify these against Kalshi's current docs before going live — API
-    # hosts have moved before (elections.kalshi.com vs trading-api.kalshi.com).
+    # Checked 2026-11-04: Kalshi recommends external-api.kalshi.com and
+    # external-api-ws.kalshi.com, and still supports these. Set KALSHI_BASE_URL
+    # and KALSHI_WS_URL to use the demo environment (README, "Going live").
     base_url: str = os.getenv("KALSHI_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
     ws_url: str = os.getenv("KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")
+    # Our own fills. Empty = the same host as ws_url.
+    fills_ws_url: str = os.getenv("KALSHI_FILLS_WS_URL", "")
 
     # --- Mode ---
     # PAPER = simulate fills against live market data, never send real orders.
-    # LIVE = real orders, real money. Always start in PAPER.
+    # LIVE = real orders, real money, and live_risk()'s limits. Always start in
+    # PAPER (README, "Going live").
     paper_trading: bool = os.getenv("KALSHI_PAPER_TRADING", "true").lower() == "true"
+    # What went into the account, so the dashboard can show profit since then.
+    # Update it if you deposit or withdraw.
+    live_starting_balance_usd: float = float(os.getenv("KALSHI_LIVE_START_USD", "50"))
+
+    @property
+    def mode_name(self) -> str:
+        """How the fill ledger labels this mode's rows."""
+        return "paper" if self.paper_trading else "live"
 
 
 @dataclass
@@ -129,9 +141,10 @@ class RiskConfig:
     # Cancel and re-quote if a resting order has been open longer than this
     # (seconds) — protects against adverse selection on stale quotes.
     max_quote_age_seconds: float = 15.0
-    # If the market's best bid/ask moves by more than this many cents since
-    # your quote was placed, cancel immediately rather than wait for the
-    # staleness timer.
+    # Live only: a quote stays where it is until the price it should be at has
+    # moved this many cents (or it hits max_quote_age_seconds). Following every
+    # cent was 5 replacements a second, 56 in the busiest second (2026-11-04
+    # log), against Kalshi's roughly 8 a second. Paper still follows every cent.
     requote_on_move_cents: int = 2
 
     # --- Kill switch ---
@@ -142,10 +155,29 @@ class RiskConfig:
     excluded_tickers: list = field(default_factory=list)
 
 
+def live_risk() -> RiskConfig:
+    """The limits for real money, sized for a $50 account: everything scales by
+    2/15, 2 contracts where paper trades 15. Total exposure is held below the
+    balance instead of scaling to $60. The daily loss limit is the number to
+    think about: $20 is 40% of the account. Raise these only together with the
+    balance. Paper keeps RiskConfig's own numbers, so paper results stay
+    comparable with what came before."""
+    return RiskConfig(
+        max_position_per_market=10,
+        max_total_exposure_usd=40.0,
+        max_daily_loss_usd=20.0,
+        max_single_market_loss_usd=8.0,
+        quote_size=2,
+        take_size=2,
+        delta_lean_ref_usd=4.0,
+        max_take_book_delta_usd=6.67,
+    )
+
+
 @dataclass
 class BotConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
-    risk: RiskConfig = field(default_factory=RiskConfig)
+    risk: RiskConfig | None = None         # None = live_risk() when live, RiskConfig() on paper
     # Tickers this bot instance will actively make markets on. Start with
     # one or two liquid markets while validating the strategy. Set them in
     # .env as a comma-separated list, or add/remove them live from the
@@ -155,6 +187,10 @@ class BotConfig:
     ])
     # (Repricing is event-driven — every coin tick or Kalshi book change.
     # Timings live at the top of engine.py.)
+
+    def __post_init__(self):
+        if self.risk is None:
+            self.risk = RiskConfig() if self.kalshi.paper_trading else live_risk()
 
 
 CONFIG = BotConfig()

@@ -9,7 +9,9 @@ Usage:
 
 The accounting lives in pnl.py (shared with the dashboard). Open positions
 in markets that have since resolved are booked at their settlement value.
-STARTING_BALANCE_USD in pnl.py is the hypothetical paper bankroll.
+It reports the mode the bot is set to: paper, or live. STARTING_BALANCE_USD in
+pnl.py is the hypothetical paper bankroll; live starts from
+KALSHI_LIVE_START_USD.
 """
 import ledger
 import pnl
@@ -18,7 +20,7 @@ from kalshi_client import build_client
 
 
 def main():
-    fills = ledger.read_all_fills()
+    fills = ledger.read_fills(CONFIG.kalshi.mode_name)
     if not fills:
         print("No fills recorded yet. This is expected if the bot hasn't")
         print("simulated or executed any fills since you started using the ledger.")
@@ -26,7 +28,7 @@ def main():
         return
 
     print("Checking settlement status for open positions...\n")
-    summary = pnl.compute(client=build_client(CONFIG), fills=fills)
+    summary = pnl.compute(client=build_client(CONFIG), fills=fills, start_usd=pnl.starting_balance(CONFIG.kalshi))
 
     print(f"{'TICKER':<35} {'FILLS':>6} {'NET POS':>8} {'AVG COST':>9} {'REALIZED':>10} {'FEES':>7}  NOTE")
     print("-" * 100)

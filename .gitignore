@@ -9,4 +9,5 @@ research/cache*/
 __pycache__/
 logs/
 halted.txt
+risk_day.json
 price_bars/

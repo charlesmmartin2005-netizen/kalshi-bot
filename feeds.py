@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 
 import websocket
 
+from kalshi_client import normalize_fill
+
 log = logging.getLogger("feeds")
 
 PRODUCTS = ("BTC-USD", "ETH-USD")
@@ -131,8 +133,12 @@ class _WsThread(threading.Thread):
             except Exception as e:
                 self._status(error=str(e)[:120])
             self._status(connected=False)
+            self.disconnected()
             time.sleep(self._backoff)
             self._backoff = min(RECONNECT_MAX_SECONDS, self._backoff * 2)
+
+    def disconnected(self):
+        pass
 
     def headers(self):
         return None
@@ -236,9 +242,10 @@ class KalshiStream(_WsThread):
     exchange = "kalshi"
     PATH = "/trade-api/ws/v2"
 
-    def __init__(self, auth, url, tickers):
+    def __init__(self, auth, url, tickers, keep_trades=True):
         super().__init__(hub=HUB, name="kalshi-ws", url=url)
         self.auth = auth
+        self.keep_trades = keep_trades          # paper fills read the tape; live, nothing would drain it
         self.tickers = list(tickers)
         self.books: dict[str, dict] = {}        # ticker -> {"yes": {px: qty}, "no": {px: qty}}
         self.trades: dict[str, list] = {}       # ticker -> REST-shaped trade rows (drained by engine)
@@ -331,7 +338,7 @@ class KalshiStream(_WsThread):
                     del levels[px]
                 self.versions[t] = self.versions.get(t, 0) + 1
             self.changed.set()
-        elif typ == "trade" and t:
+        elif typ == "trade" and t and self.keep_trades:
             ts = msg.get("ts")
             row = {"trade_id": msg.get("trade_id") or f"{t}-{ts}-{msg.get('yes_price')}-{msg.get('count')}",
                    "created_time": datetime.fromtimestamp(ts or time.time(), timezone.utc).isoformat(),
@@ -364,3 +371,61 @@ class KalshiStream(_WsThread):
     def drain_trades(self, ticker) -> list:
         with self.lock:
             return self.trades.pop(ticker, [])
+
+
+class UserStream(_WsThread):
+    """Our own fills, pushed by Kalshi as they happen. It's all markets, so the
+    connection stays up when the watchlist changes (KalshiStream reconnects).
+
+    A live bot that can't see its fills can't enforce a single limit, so the
+    engine doesn't trade unless this is healthy: subscribed, and caught up on
+    whatever happened before the subscription started (caught_up, which the
+    engine sets once it has asked Kalshi's REST API for recent fills)."""
+    exchange = "kalshi-fills"
+    PATH = "/trade-api/ws/v2"
+
+    def __init__(self, auth, url):
+        super().__init__(hub=HUB, name="kalshi-fills-ws", url=url)
+        self.auth = auth
+        self.lock = threading.Lock()
+        self.fills: list[dict] = []
+        self.changed = threading.Event()
+        self.subscribed = False
+        self.caught_up = False
+
+    @property
+    def healthy(self) -> bool:
+        return self.subscribed and self.caught_up
+
+    def headers(self):
+        return [f"{k}: {v}" for k, v in self.auth.sign_request("GET", self.PATH).items()]
+
+    def subscriptions(self):
+        return [{"id": 1, "cmd": "subscribe", "params": {"channels": ["fill"]}}]
+
+    def disconnected(self):
+        self.subscribed = self.caught_up = False
+
+    def handle(self, m):
+        typ = m.get("type")
+        if typ == "subscribed":
+            self.subscribed = True
+            self.changed.set()
+        elif typ == "fill":
+            try:
+                fill = normalize_fill(m["msg"])
+            except (KeyError, ValueError, TypeError) as e:
+                # The position check will catch whatever this one was.
+                log.error("Couldn't read a fill from Kalshi (%r): %s", e, str(m)[:300])
+                return
+            with self.lock:
+                self.fills.append(fill)
+            self.changed.set()
+        elif typ == "error":
+            log.error("Kalshi fill stream error: %s", str(m.get("msg"))[:200])
+            self._status(error=str(m.get("msg"))[:120])
+
+    def drain_fills(self) -> list[dict]:
+        with self.lock:
+            fills, self.fills = self.fills, []
+        return fills

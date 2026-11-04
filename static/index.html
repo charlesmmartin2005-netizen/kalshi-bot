@@ -1062,7 +1062,7 @@ function renderStatus() {
   if (document.title !== title) document.title = title;
   const conn = down ? `<div class="banner" role="alert"><b>Can't reach the bot.</b> ${lastOk ? `These numbers are from ${t2(lastOk / 1000)}.` : "No numbers yet."} Retrying every 1.5 s. If it doesn't come back, run server-dashboard.ps1 to reopen the SSH tunnel, then check the server.</div>`
     : h.k === "warn" ? `<div class="banner warn" role="alert"><b>The trading loop has stalled.</b> It last ran at ${t2(h.since)}, so resting quotes aren't being updated. Check the logs on the server, or use the kill switch to cancel them.</div>` : "";
-  const live = S && S.mode === "LIVE" ? `<div class="banner warn">Live mode: real orders, real money. The order endpoint schema is unverified, so test with quote_size = 1.</div>` : "";
+  const live = S && S.mode === "LIVE" ? liveBanner() : "";
   const halt = S && S.risk.halted ? `<div class="banner"><b>Kill switch tripped.</b> ${esc(S.risk.halt_reason)}. Reset it with the play button to trade again.</div>` : "";
   const html = conn + live + halt;
   if (html !== bannerHtml) $("banner").innerHTML = bannerHtml = html;
@@ -1300,6 +1300,15 @@ function renderBalance() {
     <div class="legend3">${parts.map(q => `<div class="leg num"><i style="background:${q.c[0]}"></i><span>${q.name}</span><span class="v">${usd(q.v)}</span><span class="s">${q.sub}</span></div>`).join("")}</div></div>
     <div class="minis num"><span><span class="${tone(net)}">${usd(net, true)}</span> <span class="muted">since the ${usd(p.starting_balance_usd)} start</span></span><span><span class="lab">At risk</span> ${usd(r.exposure_usd)} <span class="muted">of ${usd(r.max_exposure_usd)}</span></span>
     ${p.unmarked.length ? `<span class="down">${p.unmarked.length} open position${p.unmarked.length === 1 ? "" : "s"} not priced, held at cost</span>` : ""}</div>`;
+}
+function liveBanner() {
+  const l = S.live || {}, a = l.account;
+  const money = a ? `Kalshi shows ${usd(a.balance_usd)} available and ${usd(a.portfolio_value_usd)} in positions.` : "Waiting for the balance from Kalshi.";
+  const trouble = [];
+  if (S.running && !l.fill_stream_ok) trouble.push("<b>Can't see fills from Kalshi.</b> Quotes are pulled and nothing trades until the fill stream is back.");
+  if (l.positions_differ) trouble.push(`<b>Positions differ from Kalshi's:</b> ${esc(l.positions_differ)}. Checking again, and the bot halts if they still differ.`);
+  if (l.orders_failed_in_a_row) trouble.push(`<b>${l.orders_failed_in_a_row} order${l.orders_failed_in_a_row === 1 ? "" : "s"} in a row failed.</b> ${S.risk.max_api_errors} halts the bot. See the log.`);
+  return `<div class="banner warn">${[`Live mode: real orders, real money. ${money}`, ...trouble].map(t => `<span style="flex:1 0 100%">${t}</span>`).join("")}</div>`;
 }
 function renderPnl() {
   document.querySelectorAll("[data-unit]").forEach(b => { const on = b.dataset.unit === pnlUnit; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); });
