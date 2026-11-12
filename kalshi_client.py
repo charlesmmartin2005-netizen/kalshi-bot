@@ -32,6 +32,12 @@ class WouldCross(Exception):
     flag doing its job, not a failure."""
 
 
+class TradingPaused(Exception):
+    """Kalshi refused an order because trading is paused: 409 trading_is_paused.
+    On 2026-11-12 it answered orders this way from 3:00:00am ET, 4 seconds before
+    /exchange/status said so."""
+
+
 class WriteBudget:
     """Stays inside Kalshi's limit on orders and cancels. A Basic account gets 100
     tokens a second, refilling continuously, and can't bank more than one
@@ -127,12 +133,13 @@ class KalshiClient:
 
     def _request(self, method: str, path: str, params: dict = None, json_body: dict = None,
                   authenticated: bool = True, write: bool = False, missing_ok: bool = False,
-                  post_only: bool = False):
+                  post_only: bool = False, status_ok: bool = False):
         """write: an order or cancel. Kalshi meters writes in their own bucket,
         so they don't wait behind market-data requests, and a 429 isn't retried:
         an order sent again seconds later is at a price from seconds ago.
         missing_ok: a 404 is an answer ({}), not an error.
-        post_only: Kalshi's refusal for crossing raises WouldCross, not an error."""
+        post_only: Kalshi's refusal for crossing raises WouldCross, not an error.
+        status_ok: a 503 that carries the trading status is an answer."""
         url = f"{self.base_url}{path}"
         if authenticated and self.auth is None:
             raise KalshiAuthMissing(
@@ -168,6 +175,17 @@ class KalshiClient:
             return {}
         if post_only and resp.status_code == 400 and "post only cross" in resp.text:
             raise WouldCross(f"{path}: {resp.text[:200]}")
+        if write and resp.status_code == 409 and "trading_is_paused" in resp.text:
+            raise TradingPaused(f"{path}: {resp.text[:200]}")
+        if status_ok and resp.status_code == 503:
+            # Deep in a closure Kalshi answers /exchange/status with a 503 whose
+            # body is still the status: {"exchange_active":false,"trading_active":false}.
+            try:
+                body = resp.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and "trading_active" in body:
+                return body
         if resp.status_code >= 400:
             self._consecutive_errors += 1
             log.error("HTTP %s on %s %s: %s", resp.status_code, method, path, resp.text[:500])
@@ -236,7 +254,7 @@ class KalshiClient:
 
     def get_exchange_status(self) -> dict:
         """{trading_active, exchange_index_statuses: [{exchange_index, trading_active, ...}], ...}."""
-        return self._request("GET", "/exchange/status", authenticated=False)
+        return self._request("GET", "/exchange/status", authenticated=False, status_ok=True)
 
     def get_endpoint_costs(self) -> dict:
         """{default_cost, endpoint_costs: [{method, path, cost}]}, in rate-limit tokens."""

@@ -9,8 +9,8 @@ Where the docs don't settle something, this copies what the real API did on
 2026-11-04: the refusals for a post-only order that would cross and for too
 little money, an order list that lags behind orders and cancels, and a balance
 that resting orders don't reduce. GET /exchange/status is shaped as it answered
-that day, but how orders fail while the exchange is closed is a guess: it hasn't
-been seen yet.
+that day. Orders sent while the exchange is closed fail as they did in the
+closure of 2026-11-12: 409 trading_is_paused, before the status says closed.
 """
 import json
 import math
@@ -91,6 +91,8 @@ class FakeExchange:
         self.on_fill = None              # called with each new fill, as the fill stream would be
         self.trading_active = True       # the whole exchange
         self.exchange_trading = {}       # exchange index -> False, if only that one is closed
+        self.status_lags = False         # /exchange/status still says open after a close, as for 4s on 2026-11-12
+        self.status_answers_503 = False  # ...and later in that closure it came with a 503
         self._ids = 0
 
     # ---- test controls ----------------------------------------------------
@@ -176,11 +178,14 @@ class FakeExchange:
             if path in self.read_failures:
                 raise self.read_failures[path]
             if path == "/exchange/status":
+                if self.status_answers_503 and not self.trading_active:
+                    return FakeResponse(503, {"exchange_active": False, "trading_active": False})
+                active = self.trading_active or self.status_lags
                 return FakeResponse(200, {
-                    "exchange_active": True, "trading_active": self.trading_active, "intra_exchange_transfers_active": True,
+                    "exchange_active": True, "trading_active": active, "intra_exchange_transfers_active": True,
                     "exchange_index_statuses": [{"description": "x", "exchange_active": True, "exchange_index": i,
                                                  "intra_exchange_transfers_active": True,
-                                                 "trading_active": self.trading_active and self.exchange_trading.get(i, True)}
+                                                 "trading_active": active and (self.status_lags or self.exchange_trading.get(i, True))}
                                                 for i in self.shards]})
             if path == "/account/endpoint_costs":
                 return FakeResponse(200, {"default_cost": 10, "endpoint_costs": self.endpoint_costs})
@@ -218,7 +223,7 @@ class FakeExchange:
                 raise failure
             return _error(failure, "forced_failure")
         if not self._trading(body.get("ticker", "")):
-            return _error(503, "exchange_closed")
+            return _error(409, "trading_is_paused", "trading is paused")     # as answered on 2026-11-12
         problem = self._invalid(body)
         if problem:
             return _error(400, "invalid_order", problem)

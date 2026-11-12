@@ -71,6 +71,7 @@ FILLS_OVERLAP_SECONDS = 300    # ask for fills this far before the last one we k
 # than this isn't judged by its absence from the list.
 ORDER_LIST_LAG_SECONDS = 5.0
 FILL_STREAM_DOWN = "Can't see fills from Kalshi, so not trading until the fill stream is back"
+STATUS_LAG_SECONDS = 60     # how long an "open" status is doubted after an order was refused for a pause
 EXCHANGE_CLOSED = "Kalshi's exchange is closed, so not trading until it reopens"
 # Windows put the PC to sleep while the bot traded (twice on 2026-10-25/26).
 # Trading paused, and on wake the paper quotes left from before the sleep
@@ -147,6 +148,8 @@ class Engine:
         self.live_account = None           # latest balance from Kalshi
         self.exchange_open = True          # Kalshi's trading status, as last read
         self.maker.exchange_is_closed = self._exchange_is_closed
+        self.maker.trading_paused = self._orders_say_paused
+        self._paused_by_order_at = 0.0     # when an order was last refused because trading is paused
         self._last_balance = self._last_reconcile = 0.0
         self._fills_from = time.time() - FILLS_OVERLAP_SECONDS
         self._mismatch_seen = None
@@ -384,9 +387,20 @@ class Engine:
             return
         trading = {r["exchange_index"]: r.get("trading_active") for r in status.get("exchange_index_statuses", [])}
         is_open = bool(status.get("trading_active")) and all(trading.get(x, True) for x in self._watched_exchanges())
+        if is_open and time.time() - self._paused_by_order_at < STATUS_LAG_SECONDS:
+            return          # an order was just refused for a pause this status doesn't show yet
         if is_open != self.exchange_open:
             log.warning("Kalshi's exchange %s", "reopened" if is_open else "closed: pulling quotes until it reopens")
         self.exchange_open = is_open
+
+    def _orders_say_paused(self):
+        """Kalshi refused an order because trading is paused. Its status said so
+        4 seconds later on 2026-11-12, by which time 5 refused orders had halted
+        the bot, so the order's answer counts as closed until the status catches up."""
+        self._paused_by_order_at = time.time()
+        if self.exchange_open:
+            log.warning("Kalshi's exchange closed (it refused an order): pulling quotes until it reopens")
+        self.exchange_open = False
 
     def _exchange_is_closed(self) -> bool:
         """For when orders keep failing. It may have closed since the last read."""

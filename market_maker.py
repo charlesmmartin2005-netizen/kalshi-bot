@@ -27,7 +27,7 @@ import fair_value
 import ledger
 from config import BotConfig
 from fees import order_fee_cents
-from kalshi_client import KalshiClient, WouldCross, WriteBudget, normalize_orderbook, whole
+from kalshi_client import KalshiClient, TradingPaused, WouldCross, WriteBudget, normalize_orderbook, whole
 from risk_manager import RiskManager
 from strategy import plan_quotes
 
@@ -89,6 +89,7 @@ class MarketMaker:
         self.orders_failed_in_a_row = 0
         self.budget = WriteBudget()
         self.exchange_is_closed = lambda: False     # the engine asks Kalshi
+        self.trading_paused = lambda: None          # tells the engine an order was refused for it
 
     @property
     def paper(self):
@@ -323,6 +324,12 @@ class MarketMaker:
                 raise ValueError(f"the answer has no {missing}: {str(resp)[:200]}")
         except WouldCross:
             log.info("Quote %s yes @ %d¢ on %s would have crossed, so Kalshi refused it", action, price, ticker)
+            return None
+        except TradingPaused:
+            # Kalshi's own word that it is closed, and it comes before its status
+            # says so. Not a failed order: the engine stops trading until it reopens.
+            log.warning("Kalshi refused %s yes @ %d¢ on %s because trading is paused", action, price, ticker)
+            self.trading_paused()
             return None
         except Exception as e:
             self.orders_failed_in_a_row += 1

@@ -1151,6 +1151,50 @@ class ExchangeClosedTests(EngineLiveCase):
         self.assertFalse(e.risk.halted)
         self.assertFalse(e.exchange_open)
 
+    def test_orders_refused_before_the_status_says_closed_dont_halt_the_bot(self):
+        # 2026-11-12: orders got 409 trading_is_paused from 3:00:00am ET, the
+        # status said closed at 3:00:04, and by then 5 refusals had halted the bot.
+        e = self.trading()
+        self.ex.status_lags = True
+        self.ex.close()
+        e.maker.resting_quotes[T] = []
+        for _ in range(4):
+            e.maker._place(T, "buy", 30, 2, "fair-value", False)
+            e.maker._place(T, "sell", 70, 2, "fair-value", False)
+        self.assertFalse(e.risk.halted)
+        self.assertEqual(e.maker.orders_failed_in_a_row, 0)
+        self.assertFalse(e.exchange_open)
+        self.tick(e)                           # the status still says open: not believed yet
+        self.assertFalse(e.exchange_open)
+        self.ex.requests.clear()
+        e.run_cycle()
+        self.assertEqual([r for r in self.ex.writes() if r[0] == "POST"], [])
+
+    def test_it_reopens_after_orders_were_refused_for_a_pause(self):
+        e = self.trading()
+        self.ex.status_lags = True
+        self.ex.close()
+        e.maker.resting_quotes[T] = []
+        e.maker._place(T, "buy", 30, 2, "fair-value", False)
+        self.ex.status_lags = False
+        self.tick(e)
+        self.assertFalse(e.exchange_open)
+        self.ex.reopen()
+        e._paused_by_order_at -= 3600          # two hours later
+        self.tick(e)
+        e.run_cycle()
+        self.assertTrue(e.exchange_open)
+        self.assertEqual(len(self.ex.resting(T)), 2)
+
+    def test_a_503_status_that_says_closed_is_read_as_closed(self):
+        # From 3:43am ET that day the status came as a 503 with the status in it.
+        self.ex.status_answers_503 = True
+        self.ex.close()
+        e = self.ready(self.make_engine())
+        self.tick(e)
+        self.assertFalse(e.exchange_open)
+        self.assertEqual(e.client.consecutive_errors, 0)
+
     def test_failures_from_a_closure_dont_count_after_it_reopens(self):
         e = self.trading()
         self.ex.close()
