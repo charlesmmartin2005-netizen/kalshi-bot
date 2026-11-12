@@ -20,6 +20,89 @@ own fair_value / plan_quotes / RiskManager code.
 Kalshi's API returns these markets without strike data before ~Aug 17, so two
 months is all the history there is.
 
+## 2026-11-12: six live days, and the level fit (not switched on)
+
+Sources: the server's ledger (274 live fills, 2026-11-05 → 11-10, and the
+paper fills on the same rules from 10-29), its logs for 39 hours to 11-12
+11:26 CT, its `price_bars/` against Kalshi's 1-minute candles, and
+`lab_1s.py grid --only "level fit 5m" ...` on both months under the four fill
+models, against "live since 10-29".
+
+**What happened live**
+
+- +$27.86 after $3.92 of fees on 481 contracts, $18.51 of it on 11-05.
+- Takes (277 contracts): +3.3¢ a contract a minute later, fee 1.4¢. With the
+  paper takes since 10-29 (925 contracts, 11 trading days): +1.9¢ after the
+  fee five minutes later, standard error 0.7¢ by day, positive on 9 of 11
+  days. That is about $5 of the $27.86. The rest came from holding short
+  positions while BTC fell: 826 sell takes to 99 buys since 10-29.
+- Exit fills in the last 3 hours (168 contracts): −0.7¢ after a minute.
+  Resting quotes 8¢ from the model (30 contracts): +4.8¢.
+- 6 contracts bought in book mode at the 11-08 daily open, when the vol fit
+  dropped out: −11.7¢ after a minute.
+- 102,596 orders in 39 hours for about 24 fills. 60% replaced a quote at the
+  same price at 15 s old. A sweep of 6+ replacements took 0.44 s (median), 10+
+  about 1 s, and takes waited behind them in the same loop. 5,072 cancels
+  were of orders the bot had just cancelled itself.
+- The logs held 39 hours and no take at all, so missed takes couldn't be
+  counted.
+- The spot index: over 7 minutes it showed 76% of a Coinbase move of 2bp+
+  within the same second and all of it half a second later. Kraken's ticker
+  sent 14 quote changes in 25 s on its default trigger and 106 on `bbo`.
+
+**The model sits under the market**
+
+Model minus the ladder's mid, strikes 10–90¢, 3–14 h from close:
+
+| Data | Mean | Days under | 4¢+ under / over |
+|---|---|---|---|
+| Live price bars, 11-03 → 11-11 (33,919 minutes) | −0.76¢ | 8 of 9 | 1.3% / 0.1% |
+| Lab, Sep–Oct | −0.63¢ | 27 of 31 | 1.6% / 0.2% |
+| Lab, Aug–Sep | −0.19¢ | 23 of 31 | 0.8% / 0.3% |
+| Lab, live week 10-22 → 10-28 | −1.20¢ | 7 of 7 | 4.0% / 0.1% |
+
+It is largest on strikes priced 50–70¢ (−1.2¢). The vol fit has one number
+to move and can't shift the model up or down as a whole.
+
+**The level fit: no gain in the lab, so it stays off**
+
+`fair_value.LEVEL_FIT_HALFLIFE_MIN` (None = off) makes each 60 s fit also find
+the shift in the coin price that centres the model on the ladder, and uses
+those shifts smoothed over the half-life. The lab knows the shift one minute
+late. $ a month against "live since 10-29", paired by day, t in brackets:
+
+| Half-life | Sep–Oct normal / pess / mid / opt | Aug–Sep normal / pess / mid / opt |
+|---|---|---|
+| 5 min | −40 (−0.6) / −27 (−0.4) / −5 (−0.1) / −4 (−0.1) | −24 (−0.3) / −46 (−0.7) / −52 (−0.6) / −16 (−0.3) |
+| 15 min | −52 (−0.8) / −20 (−0.3) / −5 (−0.1) / −13 (−0.2) | +18 (0.4) / −11 (−0.2) / −14 (−0.2) / −12 (−0.2) |
+| 30 min | −17 (−0.3) / +2 (0.0) / +4 (0.1) / +2 (0.0) | +13 (0.2) / −8 (−0.2) / −21 (−0.4) / −2 (0.0) |
+| 60 min | −23 (−0.3) / −27 (−0.4) / −29 (−0.4) / −35 (−0.5) | +18 (0.3) / +3 (0.1) / −8 (−0.1) / +32 (0.6) |
+| 120 min | −26 (−0.4) / −33 (−0.5) / −36 (−0.5) / −41 (−0.6) | +35 (0.5) / −8 (−0.1) / −12 (−0.2) / +28 (0.5) |
+
+Nothing is outside noise (|t| ≤ 0.8) and no half-life is better in both
+months. It makes 10–25% fewer takes, and sd/day is lower in every cell
+($14–24 against $21–29 outside opt on Sep–Oct); at 5–30 minutes the worst
+day under mid and opt fills is −$6 to −$13 against −$20 to −$41. So it buys
+smaller swings for no more profit, on a lab that sees a fifth of the live
+takes. The takes it drops are the sells made on the smallest gaps, and live
+those made −0.05¢ after a minute (693 contracts at a 4.0–4.4¢ gap) against
+about +2¢ for bigger gaps, which minute data can't show. To try it, set the
+half-life (30 is the least harmful here) and compare `takes_log.jsonl` and the
+take markouts before and after.
+
+**Done the same day (in the code, not yet deployed)**
+
+- `Engine.run_cycle` sends every market's takes before it moves any quote
+  (`MarketMaker.take_market`, then `evaluate_market(allow_takes=False)`).
+- A coin market without a tradeable model only works its position down.
+- Live quotes are replaced at 40 s old, not 15 (`live_risk`), and the
+  engine's order check no longer cancels what the bot just cancelled.
+- `takes_log.jsonl` records every live take tried; "Placed live order" lines
+  are debug, so the log keeps weeks, not 39 hours.
+- `KALSHI_LIVE_SIZE_SCALE` scales every live size and limit together (1 if
+  unset).
+- Kraken's ticker subscribes with `event_trigger: bbo`.
+
 ## 2026-10-29: the live week, and 30 changes under four fill models
 
 Sources: the server's ledger 10-22 → 10-28 (353 paper fills), its logs, the

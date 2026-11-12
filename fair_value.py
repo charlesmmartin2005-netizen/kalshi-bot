@@ -133,6 +133,16 @@ CRYPTO_SERIES = {
     "KXXRPD": "XRP-USD", "KXXRP": "XRP-USD",
 }
 TAIL_WEIGHT, TAIL_MULT = 0.15, 2.0
+# Level fit. The vol fit can't move the model up or down as a whole, and it sat
+# under the ladder's mids: -0.76¢ on average 3-14h from close, on 8 of 9 days
+# (2026-11-03..11, 33,919 minutes), and 4¢ or more under them 13 times as often
+# as over. So sells triggered about 0.8¢ early and buys 0.8¢ late: 826 sell
+# takes to 99 buys since 2026-10-29. With this on, every 60s fit also finds the
+# shift in the coin price that centres the model on the ladder, and the model
+# uses those shifts smoothed over this half-life, so a gap that has just opened
+# stays a gap. None = off. Lab results: research/README.md, 2026-11-12.
+LEVEL_FIT_HALFLIFE_MIN: float | None = None
+LEVEL_FIT_MAX_BP = 20.0      # a fit further out than this is a bad fit, not a level
 
 
 def crypto_spot(product: str) -> float:
@@ -193,6 +203,23 @@ def _crypto_prob(market, spot, sd) -> float | None:
     return None
 
 
+def level_shift(points, spot, sd) -> float:
+    """The log shift in the coin price that best fits the model to `points`
+    ([(market, mid in cents)]): least squares, three Gauss-Newton steps."""
+    s, h = 0.0, 1e-4
+    for _ in range(3):
+        num = den = 0.0
+        for m, mid in points:
+            p = _crypto_prob(m, spot * math.exp(s), sd) * 100
+            d = (_crypto_prob(m, spot * math.exp(s + h), sd) - _crypto_prob(m, spot * math.exp(s - h), sd)) * 100 / (2 * h)
+            num += (mid - p) * d
+            den += d * d
+        if not den:
+            break
+        s += num / den
+    return s
+
+
 def _event_vol_multiplier(event_ticker, spot, base_sd):
     """Scale realized vol so the model matches the market's own ladder.
 
@@ -213,11 +240,31 @@ def _event_vol_multiplier(event_ticker, spot, base_sd):
             if b and a and a < 100 and a - b <= 4 and 10 <= (a + b) / 2 <= 90:
                 pts.append((m, (a + b) / 2))
         if len(pts) < 3:
-            return 1.0, 0
+            return 1.0, 0, _level.get(event_ticker, 0.0)
         best = min((sum((_crypto_prob(m, spot, base_sd * k) * 100 - mid) ** 2 for m, mid in pts), k)
                    for k in [x / 20 for x in range(6, 61)])   # 0.30x … 3.00x
-        return best[1], len(pts)
-    return _cached_bg(("volfit", event_ticker), 60, fit)
+        return best[1], len(pts), _smoothed_level(event_ticker, pts, spot, base_sd * best[1])
+    return _cached_bg(("volfit", event_ticker), VOL_FIT_SECONDS, fit)
+
+
+VOL_FIT_SECONDS = 60
+_level: dict = {}      # event -> smoothed log shift in the coin price
+
+
+def _smoothed_level(event_ticker, pts, spot, sd) -> float:
+    """This fit's level shift blended into the event's running one (0 while
+    the level fit is off)."""
+    if not LEVEL_FIT_HALFLIFE_MIN:
+        return 0.0
+    cap = LEVEL_FIT_MAX_BP / 1e4
+    raw = max(-cap, min(cap, level_shift(pts, spot, sd)))
+    prev = _level.get(event_ticker)
+    alpha = 1 - 0.5 ** (VOL_FIT_SECONDS / 60 / LEVEL_FIT_HALFLIFE_MIN)
+    _level[event_ticker] = raw if prev is None else prev + alpha * (raw - prev)
+    if len(_level) > 50:
+        for key in list(_level)[:25]:
+            del _level[key]
+    return _level[event_ticker]
 
 
 def crypto_fair_value(market: dict) -> FairValue | None:
@@ -230,14 +277,17 @@ def crypto_fair_value(market: dict) -> FairValue | None:
         return None
     spot, sigma = crypto_spot(product), crypto_sigma_per_sqrt_hour(product)
     base_sd = sigma * math.sqrt(_effective_hours(hours))
-    mult, n_fit = _event_vol_multiplier(market.get("event_ticker"), spot, base_sd)
-    p = _crypto_prob(market, spot, base_sd * mult)
+    mult, n_fit, level = _event_vol_multiplier(market.get("event_ticker"), spot, base_sd)
+    priced_at = spot * math.exp(level)
+    p = _crypto_prob(market, priced_at, base_sd * mult)
     if p is None:
         return None
     sym = product.split("-")[0]
     fit = f"vol fit ×{mult:.2f} on {n_fit} strikes" if n_fit else "realized vol (no fit)"
-    delta = (_crypto_prob(market, spot * 1.005, base_sd * mult)
-             - _crypto_prob(market, spot * 0.995, base_sd * mult))
+    if level:
+        fit += f", level {level * 1e4:+.1f}bp"
+    delta = (_crypto_prob(market, priced_at * 1.005, base_sd * mult)
+             - _crypto_prob(market, priced_at * 0.995, base_sd * mult))
     return FairValue(_clip(p * 100), "crypto",
                      f"{sym} ${spot:,.2f} · σ {sigma * mult * 100:.2f}%/√h ({fit}) · {hours:.1f}h left",
                      # Without a ladder fit (thin books, e.g. SOL ran 27¢ off
@@ -334,6 +384,10 @@ def weather_fair_value(market: dict) -> FairValue | None:
 
 
 # ---- entry point -------------------------------------------------------------------
+
+def is_crypto(market: dict) -> bool:
+    return _series(market) in CRYPTO_SERIES
+
 
 def supported(market: dict) -> bool:
     s = _series(market)

@@ -39,7 +39,7 @@ sys.path.insert(0, str(REPO / "research"))
 import strategy_lab as L  # noqa: E402
 import fees  # noqa: E402
 from config import RiskConfig  # noqa: E402
-from fair_value import CRYPTO_MIN_HOURS_TO_TRADE, FairValue, _crypto_prob  # noqa: E402
+from fair_value import CRYPTO_MIN_HOURS_TO_TRADE, FairValue, _crypto_prob, level_shift  # noqa: E402
 from risk_manager import RiskManager  # noqa: E402
 from strategy import plan_quotes  # noqa: E402
 
@@ -81,6 +81,11 @@ class V:
     fill_model: str = "between"
     at_price_fills: bool = True     # honest: also fill at our price if we improved the touch
     latency_s: int = 1              # sec: our quote reflects the coin price this many seconds before the trade
+    # Level fit (fair_value.LEVEL_FIT_HALFLIFE_MIN): the model's coin price is
+    # shifted so it matches the ladder's mids on average, the shift smoothed
+    # over this half-life and known one minute late. None = off.
+    level_halflife_min: float | None = None
+    level_max_bp: float = 20.0
     sec_clamp_book: str = "prev"    # sec: Kalshi book for the touch clamps: "prev" (known) or "next" (end of
                                     # the trade's minute — look-ahead, a bound on how much book staleness matters)
 
@@ -95,6 +100,7 @@ def precompute(days):
             n = len(ev["spots"])
             ev["pm"] = {t: [_crypto_prob(ev["mkt"][t], ev["spots"][i], ev["sd"][i]) * 100 for i in range(n)]
                         for t in ev["trades"]}
+            ev["lvl"] = [_level_shift(ev, i) for i in range(n)]
             ev["by_min_ts"] = {}
             for t, rows in ev["trades"].items():
                 d = {}
@@ -104,6 +110,21 @@ def precompute(days):
                         d.setdefault(i, []).append((when, yes, px, cnt))
                 ev["by_min_ts"][t] = d
     return days
+
+
+def _level_shift(ev, i):
+    """The log shift in the coin price that best matches the model to the
+    ladder's mids at minute i (strikes 10-90¢, spread <= 4¢), or None with
+    fewer than 3 such strikes. The same sum as fair_value.level_shift."""
+    spot, sd = ev["spots"][i], ev["sd"][i]
+    pts = []
+    for t in ev["trades"]:
+        b, a = ev["books"][t][i]
+        if b and a and a - b <= 4 and 10 <= (a + b) / 2 <= 90:
+            pts.append((ev["mkt"][t], (a + b) / 2))
+    if len(pts) < 3 or not ev["fit_ok"][i]:
+        return None
+    return level_shift(pts, spot, sd)
 
 
 # ---- 1-second coin prices (Binance archive) ----------------------------------
@@ -178,6 +199,9 @@ def run_day(v: V, evs):
     offset = {}                     # ticker -> EMA of (model - mid), up to the previous minute
     alpha = 1 - 0.5 ** (1 / v.halflife_min)
     n = min(len(e["spots"]) for e in evs)
+    level = {}                      # event -> smoothed log shift, from fits up to the previous minute
+    l_alpha = 1 - 0.5 ** (1 / v.level_halflife_min) if v.level_halflife_min else 0.0
+    l_cap = v.level_max_bp / 1e4
     for i in range(n):
         marks = {}
         hour_et = datetime.fromtimestamp(evs[0]["open"] + i * 60, ET).hour
@@ -186,6 +210,15 @@ def run_day(v: V, evs):
             if s not in v.strikes:
                 continue
             spot, sd = ev["spots"][i], ev["sd"][i]
+            lv = 1.0
+            if v.level_halflife_min:
+                lv = math.exp(level.get((ev["series"], ev["close"]), 0.0))       # known before this minute's books
+                raw_l = ev["lvl"][i]
+                if raw_l is not None:
+                    raw_l = max(-l_cap, min(l_cap, raw_l))
+                    prev_l = level.get((ev["series"], ev["close"]))
+                    level[(ev["series"], ev["close"])] = raw_l if prev_l is None else prev_l + l_alpha * (raw_l - prev_l)
+                spot = spot * lv
             hours_left = (ev["close"] - ev["open"]) / 3600 - i / 60
             tradeable = hours_left >= v.min_hours and ev["fit_ok"][i]
             if s not in watched or (v.roll_min and i % v.roll_min == 0):
@@ -217,7 +250,7 @@ def run_day(v: V, evs):
                 bid, ask = ev["books"][t][i]
                 if bid is not None and ask is not None:
                     marks[t] = (bid + ask) / 2
-                pm = ev["pm"][t][i] if t in ev["pm"] else _crypto_prob(ev["mkt"][t], spot, sd) * 100
+                pm = ev["pm"][t][i] if t in ev["pm"] and lv == 1.0 else _crypto_prob(ev["mkt"][t], spot, sd) * 100
                 mid = mid_of(bid, ask)
                 if v.fill_model == "sec" and i > 0:
                     # Each real trade meets the quote the bot would have had
@@ -236,7 +269,7 @@ def run_day(v: V, evs):
                         bq = bn_price(s, when - v.latency_s)
                         if not bq:
                             continue
-                        pm_q = _crypto_prob(ev["mkt"][t], bq * ratio, sd_q) * 100
+                        pm_q = _crypto_prob(ev["mkt"][t], bq * ratio * lv, sd_q) * 100
                         net_q = risk.net(t)
                         sides_q, _ = risk.allowed_sides(t)
                         if (t not in watched[s]) or (hour_et in v.no_open_hours) or \
@@ -529,6 +562,10 @@ CANDIDATES = {
     # config.py since 2026-10-29: the row above, through the bot's own rules
     # (RiskConfig.max_take_hours in plan_quotes, fair_value's 3h stop)
     "live since 10-29": dict(cfg=RiskConfig(), min_hours=CRYPTO_MIN_HOURS_TO_TRADE),
+    # 2026-11-12: the model sat 0.2-1.2¢ under the ladder's mids (research/README.md).
+    # Each is "live since 10-29" with the level fit at that half-life.
+    **{f"level fit {h}m": dict(cfg=RiskConfig(), min_hours=CRYPTO_MIN_HOURS_TO_TRADE, level_halflife_min=h)
+       for h in (5, 15, 30, 60, 120)},
 }
 GRID = REPO / "research" / "cache_grid"
 

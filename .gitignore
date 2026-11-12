@@ -2,6 +2,7 @@
 *.pem
 *.key
 fills_log*.jsonl
+takes_log.jsonl
 arb_log.jsonl
 # downloaded market data (~14 MB) — rebuild with: python research/strategy_lab.py fetch
 research/cache*/

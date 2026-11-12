@@ -240,11 +240,18 @@ order was placed and cancelled too.
 - **Sizes:** 2 contracts where paper trades 15, with the limits scaled to match
   (`live_risk()` in `config.py`): 10 per market, $40 total exposure, $20 daily
   loss, $8 per market. Paper keeps its own numbers. Raise these only together
-  with the balance. The strategy itself is the same as paper's.
-- **Takes** are immediate-or-cancel, so a miss never rests on the book.
+  with the balance: `KALSHI_LIVE_SIZE_SCALE` in `.env` multiplies all of them at
+  once (1.5 is 3 contracts, $60 of exposure, a $30 daily loss limit), and the
+  bot never changes it by itself. The strategy itself is the same as paper's.
+- **Takes** are immediate-or-cancel, so a miss never rests on the book. Every
+  market's takes go out before any quote is moved. Each one the bot tries is
+  written to `takes_log.jsonl` with how it ended (filled, missed, failed, or why
+  it wasn't sent), the model's gap and how long Kalshi took to answer.
 - **Quotes** are post-only and expire after 60 seconds, so a dead bot can't leave
   them up for long. One stays put until its price should move 2¢ or it reaches
-  15 seconds old. Paper still follows every cent.
+  40 seconds old. Paper still follows every cent.
+- **Without a model price** (the vol fit drops out, as at the daily open) a coin
+  market only works its position down. Paper does the same.
 - **Positions come from Kalshi.** A take is booked from its own answer, everything
   else from the fill stream, each fill once, with the fee Kalshi charged.
 - **Before every start** it cancels orders left by a previous run, books any fills
@@ -363,6 +370,7 @@ doesn't see live positions, so close them on Kalshi first.
   BTC price a day, so P&L needs months to mean anything; markouts need about a
   week. As of 2026-11-04 it has 5 settled days on the current rules.
 - Paper assumes every take fills instantly at the shown price. Comparing real fills
-  with that is the main thing a small live account teaches.
+  with that is the main thing a small live account teaches: `takes_log.jsonl` on
+  the server has every take tried, so the share marked `missed` is the answer.
 - Maker fills are free on KXBTCD/KXETHD (fee schedule checked 2026-10-22). Live P&L
   uses what Kalshi charged either way.

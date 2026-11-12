@@ -495,7 +495,11 @@ class Engine:
         with self.lock:
             tracked = {q.order_id for quotes in self.maker.resting_quotes.values() for q in quotes}
             for o in orders:
-                if o["order_id"] not in tracked and self._is_ours(o.get("ticker", "")):
+                # One the bot just cancelled is only still on the lagging list:
+                # cancelling it again was 5,072 wasted requests in 39 hours
+                # (2026-11-10..12), each one sent while holding this lock.
+                if (o["order_id"] not in tracked and self._is_ours(o.get("ticker", ""))
+                        and not self.maker.just_cancelled(o["order_id"])):
                     log.warning("Cancelling order %s on %s: the bot isn't tracking it", o["order_id"], o["ticker"])
                     try:
                         self.client.cancel_order(o["order_id"], o["ticker"])
@@ -805,6 +809,12 @@ class Engine:
         if live and not self._ready_to_trade():
             tickers = []
         marks = {}
+        # Two passes: every market's takes go out before any market's quotes
+        # are moved. A coin move that opens a gap also moves every quote, and
+        # 6-12 replacements took 0.4-1.3s (2026-11-10..12 logs), which the last
+        # market's take used to wait behind. A 6-8¢ gap was worth 5.2¢ taken at
+        # once and 2.8¢ a second later (research/README.md, 2026-10-22).
+        ready = []                                 # (ticker, book, takes sent)
         for ticker in tickers:
             try:
                 book = self._current_book(ticker)
@@ -844,9 +854,20 @@ class Engine:
                     # rest quotes nothing would ever pull.
                     if ticker not in self.cfg.watched_tickers:
                         continue
-                    self.maker.evaluate_market(ticker, self.market_info[ticker], book, allow_takes=fresh_for_take)
-                    if self.maker.last_plan.get(ticker, {}).get("takes"):
+                    takes = self.maker.take_market(ticker, self.market_info[ticker], book) if fresh_for_take else []
+                    if takes:
                         self._take_version[ticker] = version
+                ready.append((ticker, book, takes))
+            except Exception as e:
+                self.last_error = f"{ticker}: {e}"
+                log.exception("Error evaluating %s: %s", ticker, e)
+        for ticker, book, takes in ready:
+            try:
+                with self.lock:
+                    if ticker not in self.cfg.watched_tickers:
+                        continue
+                    self.maker.evaluate_market(ticker, self.market_info[ticker], book, allow_takes=False,
+                                               takes_sent=takes)
                 self._record_book(ticker, book)
                 if book["yes_bid"] is not None and book["yes_ask"] is not None:
                     marks[ticker] = (book["yes_bid"] + book["yes_ask"]) / 2

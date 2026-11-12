@@ -7,7 +7,10 @@ import json
 import time
 import os
 
+from fees import per_contract_fee_cents
+
 LEDGER_PATH = os.path.join(os.path.dirname(__file__), "fills_log.jsonl")
+TAKES_FILE = "takes_log.jsonl"     # in the ledger's folder
 
 
 def append_fill(ticker: str, side: str, action: str, count: int, price_cents: int,
@@ -40,6 +43,26 @@ def append_fill(ticker: str, side: str, action: str, count: int, price_cents: in
         if value is not None:
             record[key] = value
     with open(LEDGER_PATH, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def append_take(ticker: str, action: str, price_cents: int, count: float, model_cents: float, outcome: str,
+                filled: float = 0, ms: float | None = None, hours_left: float | None = None):
+    """Record one live take the bot tried, next to the fills ledger in
+    takes_log.jsonl. outcome: "filled", "missed" (nothing left at the price),
+    "failed" (the order was rejected or unanswered), or why it wasn't sent
+    ("can't pay", "order limit"). gap_cents is how far the price was from the
+    model after the taker fee; ms is how long Kalshi took to answer."""
+    edge = (model_cents - price_cents) if action == "buy" else (price_cents - model_cents)
+    record = {"ts": time.time(), "ticker": ticker, "action": action, "price_cents": price_cents, "count": count,
+              "model_cents": round(model_cents, 2),
+              "gap_cents": round(edge - per_contract_fee_cents(price_cents, maker=False), 2),
+              "outcome": outcome, "filled": filled}
+    if ms is not None:
+        record["ms"] = round(ms, 1)
+    if hours_left is not None:
+        record["hours_left"] = round(hours_left, 2)
+    with open(os.path.join(os.path.dirname(LEDGER_PATH), TAKES_FILE), "a") as f:
         f.write(json.dumps(record) + "\n")
 
 

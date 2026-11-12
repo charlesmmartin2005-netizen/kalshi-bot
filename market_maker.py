@@ -40,6 +40,9 @@ CANCELLED_MEMORY_SECONDS = 30
 # old prices for long (2026-10-26: quotes left while the PC slept lost $115 in
 # paper). Well past max_quote_age_seconds, so a running bot replaces them first.
 QUOTE_EXPIRY_SECONDS = 60
+# How long a cancel the bot sent is remembered, so the engine's check doesn't
+# cancel it again when Kalshi's order list still shows it (it lags under 2s).
+CANCEL_MEMORY_SECONDS = 10
 # Quotes leave this much of the write budget unspent, so a take never waits on one.
 TAKE_RESERVE_TOKENS = 30
 
@@ -86,6 +89,7 @@ class MarketMaker:
         # as fills yet: those fills, when they arrive, are already counted.
         self._booked_by_answer: dict[str, float] = {}
         self._order_info: dict[str, tuple] = {}     # order or client order ID -> (strategy, model cents)
+        self._cancelled: dict[str, float] = {}      # order ID -> when its cancel was answered
         self.orders_failed_in_a_row = 0
         self.budget = WriteBudget()
         self.exchange_is_closed = lambda: False     # the engine asks Kalshi
@@ -98,29 +102,32 @@ class MarketMaker:
     # ---- one evaluation cycle for a single market -------------------------
 
     def evaluate_market(self, ticker: str, market: dict | None = None, book: dict | None = None,
-                        allow_takes: bool = True) -> dict:
+                        allow_takes: bool = True, takes_sent: list | None = None) -> dict:
+        """Takes, then the resting quotes. The engine sends every market's takes
+        first (take_market) and calls this with allow_takes=False and the takes
+        it sent, so no take waits behind another market's quotes."""
         if book is None:
             book = normalize_orderbook(self.client.get_orderbook(ticker))
-        fv = fair_value.fair_value(market) if market and fair_value.supported(market) else None
-        sides, why = self.risk.allowed_sides(ticker)
-        if fv and fv.underlying:
-            self.deltas[ticker] = (fv.underlying, fv.delta)
+        if allow_takes:
+            takes_sent = self.take_market(ticker, market, book)
+        takes_sent = takes_sent or []
+        fv, sides, why = self._model_and_sides(ticker, market)
         lean, port = self._delta_lean(ticker, fv)
         plan_book = self._paper_depth(ticker, book) if self.paper else book
+        quote_fv = fv
         if lean:
             # The lean moves resting quotes only; takes are judged on the raw
             # model (hedging by crossing the spread lost money in testing).
-            leaned = replace(fv, cents=min(99.0, max(1.0, fv.cents + lean)))
-            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, leaned, anchor=fv.cents)
-            plan.takes = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
-        else:
-            plan = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv)
-        if not allow_takes:
-            plan.takes = []
-        plan.takes = self._cap_take_delta(plan.takes, fv)
-
-        for action, price, size in plan.takes:
-            self._take(ticker, action, price, size, fv)
+            quote_fv = replace(fv, cents=min(99.0, max(1.0, fv.cents + lean)))
+        # Takes are take_market's, sent before this: the position already has them.
+        plan = plan_quotes(plan_book, self.risk.net(ticker), replace(self.cfg.risk, enable_taking=False), sides,
+                           quote_fv, anchor=fv.cents if fv else None)
+        plan.takes = takes_sent
+        for action, _, n in takes_sent:
+            # As when one plan made both: a side that just took quotes that much less.
+            quote = getattr(plan, action)
+            if quote:
+                setattr(plan, action, (quote[0], quote[1] - n) if quote[1] > n else None)
         model = fv.cents if fv and fv.tradeable else None
         self._sync_side(ticker, "buy", plan.buy, book, plan.mode, model)
         self._sync_side(ticker, "sell", plan.sell, book, plan.mode, model)
@@ -133,6 +140,34 @@ class MarketMaker:
             "book_delta_usd": round(port, 2) if port is not None else None,
         }
         return book
+
+    def _model_and_sides(self, ticker, market):
+        """The model's price, and the sides the bot may trade (and why not both).
+        A coin market without a model price it trusts only works its position
+        down: quoting inside the book's spread with no price of its own bought
+        6 contracts 11.7¢ too high at the daily open on 2026-11-08."""
+        fv = fair_value.fair_value(market) if market and fair_value.supported(market) else None
+        sides, why = self.risk.allowed_sides(ticker)
+        if fv and fv.underlying:
+            self.deltas[ticker] = (fv.underlying, fv.delta)
+        if market and fair_value.is_crypto(market) and not (fv and fv.tradeable):
+            net = self.risk.net(ticker)
+            sides = sides & ({"sell"} if net > 0 else {"buy"} if net < 0 else set())
+            why = why or "no model price to trade on: only working the position down"
+        return fv, sides, why
+
+    def take_market(self, ticker: str, market: dict | None, book: dict) -> list:
+        """Send this market's takes, if the book is far enough from the model.
+        Returns them: [(action, price_cents, size)]."""
+        fv, sides, _ = self._model_and_sides(ticker, market)
+        if not (fv and fv.tradeable and sides):
+            return []
+        plan_book = self._paper_depth(ticker, book) if self.paper else book
+        takes = plan_quotes(plan_book, self.risk.net(ticker), self.cfg.risk, sides, fv).takes
+        takes = self._cap_take_delta(takes, fv)
+        for action, price, size in takes:
+            self._take(ticker, action, price, size, fv)
+        return takes
 
     def _paper_depth(self, ticker, book) -> dict:
         """The book with our own paper takes removed from the touch sizes."""
@@ -237,7 +272,9 @@ class MarketMaker:
                 return
             order_id = resp["order_id"]
             self._remember_order(order_id, strategy, model_cents)
-            log.info("Placed live order %s: %s yes %s @ %d¢ on %s", order_id, action, size, price, ticker)
+            # Debug: at about 2,600 an hour these lines filled the log in 39 hours
+            # and pushed every take out of it (2026-11-12). Kalshi keeps the orders.
+            log.debug("Placed live order %s: %s yes %s @ %d¢ on %s", order_id, action, size, price, ticker)
             if float(resp["remaining_count"]) <= 0:
                 return                     # a post-only order that would have crossed
         self.resting_quotes.setdefault(ticker, []).append(RestingQuote(
@@ -260,6 +297,15 @@ class MarketMaker:
                 self.client.cancel_order(q.order_id, q.ticker)
             except Exception as e:
                 log.error("Cancel failed for %s: %s", q.order_id, e)
+                return
+            now = time.time()
+            self._cancelled[q.order_id] = now
+            if len(self._cancelled) > 500:
+                self._cancelled = {k: t for k, t in self._cancelled.items() if now - t < CANCEL_MEMORY_SECONDS}
+
+    def just_cancelled(self, order_id) -> bool:
+        """Did the bot cancel this order in the last few seconds?"""
+        return time.time() - self._cancelled.get(order_id, 0) < CANCEL_MEMORY_SECONDS
 
     def _take(self, ticker, action, price, size, fv):
         log.info("%sTAKE %s yes %d @ %d¢ on %s (model %.1f¢)",
@@ -273,18 +319,34 @@ class MarketMaker:
         else:
             if not self._can_pay(ticker, action, price, size):
                 log.info("Take on %s skipped: the account can't pay for it", ticker)
+                self._log_take(ticker, action, price, size, fv, "can't pay")
                 return
             if not self.budget.spend(WriteBudget.ORDER):
                 log.warning("Take on %s skipped: at the limit on orders per second", ticker)
+                self._log_take(ticker, action, price, size, fv, "order limit")
                 return
             # Immediate-or-cancel: whatever doesn't fill now is gone, not left
             # on the book at a price nothing is watching.
             client_order_id = str(uuid.uuid4())
             self._remember_order(client_order_id, "take", fv.cents)
+            sent = time.monotonic()
             resp = self._send_order(ticker, action, size, price, "immediate_or_cancel",
                                     client_order_id=client_order_id)
-            if resp is not None:
-                self._book_take_answer(ticker, action, resp, fv.cents)
+            ms = (time.monotonic() - sent) * 1000
+            if resp is None:
+                self._log_take(ticker, action, price, size, fv, "failed", ms=ms)
+                return
+            self._book_take_answer(ticker, action, resp, fv.cents)
+            filled = float(resp["fill_count"])
+            self._log_take(ticker, action, price, size, fv, "filled" if filled > 0 else "missed", filled, ms)
+
+    def _log_take(self, ticker, action, price, size, fv, outcome, filled=0.0, ms=None):
+        """Every live take the bot tried, in takes_log.jsonl: the fills ledger
+        only has the ones that filled, so it can't say how many were missed."""
+        try:
+            ledger.append_take(ticker, action, price, size, fv.cents, outcome, whole(filled), ms, fv.hours_left)
+        except OSError as e:
+            log.warning("Couldn't write the take log: %s", e)
 
     def _cancel_resting(self, ticker: str, reason: str = ""):
         quotes = self.resting_quotes.get(ticker, [])

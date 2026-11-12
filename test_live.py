@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -24,9 +25,11 @@ from unittest import mock
 import requests
 
 import engine
+import fair_value
 import feeds
 import ledger
 import live_check
+import market_maker
 import pnl
 import show_pnl
 from config import BotConfig, KalshiConfig, RiskConfig, live_risk
@@ -1772,6 +1775,213 @@ class PaperIsUntouchedTests(LiveCase):
         row = ledger.read_all_fills()[0]
         self.assertEqual(row["mode"], "paper")
         self.assertNotIn("fee_cents", row)
+
+
+class TakesFirstTests(EngineLiveCase):
+    def test_every_markets_take_goes_out_before_any_quote(self):
+        # 6-12 quote replacements took 0.4-1.3s (2026-11-10..12), and the last
+        # market's take waited behind them while the gap closed.
+        self.price_model(70.0)                 # both 60¢ asks are 8.3¢ cheap after the fee
+        self.ex.set_book(T2, 40, 60)
+        self.ex.markets[T2] = {"close_time": iso(6)}
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        self.watch(e, T2)
+        self.ex.requests.clear()
+        e.run_cycle()
+        sent = [r[3]["time_in_force"] for r in self.ex.writes() if r[0] == "POST"]
+        self.assertEqual(sent[:2], ["immediate_or_cancel"] * 2)
+        self.assertIn("good_till_canceled", sent[2:])
+        self.assertEqual((self.ex.positions[T], self.ex.positions[T2]), (2.0, 2.0))
+
+    def test_a_take_still_shrinks_that_sides_quote(self):
+        self.price_model(70.0)
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.assertEqual([o for o in self.ex.resting(T) if o["side"] == "bid"], [])
+        self.assertEqual(e.maker.last_plan[T]["takes"], 1)
+
+
+class NoModelTests(LiveCase):
+    def test_a_coin_market_without_a_model_opens_nothing(self):
+        # 2026-11-08, the daily open: the vol fit dropped out, and quoting 1¢
+        # inside a wide spread bought 6 contracts 11.7¢ too high.
+        self.fair_value.return_value = model(50.0, tradeable=False)
+        maker = self.make_maker()
+        self.evaluate(maker)
+        self.assertEqual(self.ex.writes(), [])
+        self.assertIn("no model", maker.last_plan[T]["reason"])
+
+    def test_it_still_works_a_position_down(self):
+        self.fair_value.return_value = model(50.0, tradeable=False)
+        maker = self.make_maker()
+        self.risk.record_fill(T, "yes", "buy", 2, 45)
+        self.evaluate(maker)
+        self.assertEqual({o["side"] for o in self.ex.resting(T)}, {"ask"})
+
+    def test_a_market_that_never_had_a_model_still_quotes_the_book(self):
+        fed = "KXFED-26DEC-T4.00"
+        self.fair_value.return_value = None
+        self.ex.set_book(fed, 40, 60)
+        self.evaluate(self.make_maker(), fed)
+        self.assertEqual({o["side"] for o in self.ex.resting(fed)}, {"ask", "bid"})
+
+
+class TakeLogTests(LiveCase):
+    def takes(self):
+        path = os.path.join(os.path.dirname(self.ledger_path), ledger.TAKES_FILE)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_a_filled_take_is_logged_with_its_gap_and_how_long_kalshi_took(self):
+        self.price_model(70.0)
+        self.evaluate(self.make_maker())
+        (row,) = self.takes()
+        self.assertEqual((row["outcome"], row["filled"], row["action"], row["price_cents"]), ("filled", 2, "buy", 60))
+        self.assertAlmostEqual(row["gap_cents"], 10 - 1.68, places=2)
+        self.assertGreaterEqual(row["ms"], 0)
+        self.assertEqual(row["hours_left"], 6)
+
+    def test_a_missed_take_is_logged_too(self):
+        # The fills ledger never sees these, so it couldn't say how many there were.
+        self.price_model(70.0)
+        self.ex.set_book(T, 40, 65)            # the 60¢ offer went before the order arrived
+        self.evaluate(self.make_maker())
+        self.assertEqual([(r["outcome"], r["filled"]) for r in self.takes()], [("missed", 0)])
+        self.assertEqual(ledger.read_all_fills(), [])
+
+    def test_a_take_the_account_cant_pay_for_is_logged(self):
+        self.price_model(70.0)
+        maker = self.make_maker()
+        maker.available_cents = 10
+        self.evaluate(maker)
+        self.assertEqual([r["outcome"] for r in self.takes()], ["can't pay"])
+
+    def test_paper_takes_arent_logged(self):
+        self.price_model(70.0)
+        cfg = small_limits()
+        paper = MarketMaker(real_client(self.ex), RiskManager(cfg),
+                            BotConfig(kalshi=KalshiConfig(paper_trading=True), risk=cfg, watched_tickers=[]))
+        paper.evaluate_market(T, {"ticker": T}, book())
+        self.assertEqual(self.takes(), [])
+
+
+class RedundantCancelTests(EngineLiveCase):
+    def cancels(self):
+        return [r for r in self.ex.writes() if r[0] == "DELETE"]
+
+    def test_an_order_the_bot_just_cancelled_isnt_cancelled_again(self):
+        # 5,072 of these in 39 hours (2026-11-10..12), each sent holding the engine's lock.
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.ex.order_list_lag_seconds = 2.0
+        e.maker._cancel_resting(T, "moving")
+        self.ex.requests.clear()
+        self.check_positions(e)
+        self.assertEqual(self.cancels(), [])
+
+    def test_one_still_listed_long_after_its_cancel_is_cancelled_again(self):
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        self.ex.order_list_lag_seconds = 100.0
+        for o in self.ex.orders.values():
+            o["created_at"] -= 200             # old enough to be on a list that far behind
+        e.maker._cancel_resting(T, "moving")
+        e.maker._cancelled = {k: t - 60 for k, t in e.maker._cancelled.items()}
+        self.ex.requests.clear()
+        self.check_positions(e)
+        self.assertEqual(len(self.cancels()), 2)
+
+    def test_a_cancel_that_failed_doesnt_count_as_cancelled(self):
+        e = self.ready(self.make_engine())
+        self.watch(e)
+        e.run_cycle()
+        q = e.maker.resting_quotes[T][0]
+        with mock.patch.object(e.maker.client, "cancel_order", side_effect=requests.Timeout("read timed out")):
+            e.maker._cancel(q)
+        self.assertFalse(e.maker.just_cancelled(q.order_id))
+
+
+class LiveSizeTests(LiveCase):
+    def test_the_scale_is_1_unless_set(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("KALSHI_LIVE_SIZE_SCALE", None)
+            self.assertEqual(live_risk(), live_risk(1.0))
+        self.assertEqual((live_risk(1.0).take_size, live_risk(1.0).max_total_exposure_usd), (2, 40.0))
+
+    def test_the_scale_moves_every_size_and_limit_together(self):
+        with mock.patch.dict(os.environ, {"KALSHI_LIVE_SIZE_SCALE": "1.5"}):
+            r = live_risk()
+        self.assertEqual((r.quote_size, r.take_size, r.max_position_per_market), (3, 3, 15))
+        self.assertEqual((r.max_total_exposure_usd, r.max_daily_loss_usd, r.max_single_market_loss_usd),
+                         (60.0, 30.0, 12.0))
+        self.assertEqual((r.delta_lean_ref_usd, r.max_take_book_delta_usd), (6.0, 10.0))
+
+    def test_a_scale_that_makes_no_sense_stops_the_bot_starting(self):
+        for bad in (0, -1, 11):
+            with self.assertRaises(ValueError):
+                live_risk(bad)
+
+    def test_a_live_quote_at_the_right_price_is_left_alone_for_40_seconds(self):
+        # 60% of 102,596 orders in 39 hours replaced a quote at the same price, at 15s old.
+        self.assertEqual(live_risk().max_quote_age_seconds, 40.0)
+        maker = self.make_maker(max_quote_age_seconds=live_risk().max_quote_age_seconds)
+        self.evaluate(maker)
+        self.ex.requests.clear()
+        for q in maker.resting_quotes[T]:
+            q.placed_at -= 30
+        self.evaluate(maker)
+        self.assertEqual(self.ex.writes(), [])
+        for q in maker.resting_quotes[T]:
+            q.placed_at -= 11
+        self.evaluate(maker)
+        self.assertEqual(len([r for r in self.ex.writes() if r[0] == "POST"]), 2)
+
+    def test_it_is_replaced_before_kalshi_expires_it(self):
+        self.assertLess(live_risk().max_quote_age_seconds, market_maker.QUOTE_EXPIRY_SECONDS - 15)
+
+
+class LevelFitTests(unittest.TestCase):
+    STRIKES = [{"strike_type": "greater", "floor_strike": k} for k in (79000, 79500, 80000, 80500, 81000)]
+
+    def setUp(self):
+        fair_value._level.clear()
+        self.addCleanup(fair_value._level.clear)
+
+    def ladder(self, shift):
+        """The ladder's mids if the market priced the coin `shift` (log) above 80,000."""
+        return [(m, fair_value._crypto_prob(m, 80000 * math.exp(shift), 0.01) * 100) for m in self.STRIKES]
+
+    def test_it_finds_the_shift_the_ladder_is_priced_at(self):
+        self.assertAlmostEqual(fair_value.level_shift(self.ladder(0.0003), 80000, 0.01), 0.0003, places=6)
+        self.assertAlmostEqual(fair_value.level_shift(self.ladder(-0.0005), 80000, 0.01), -0.0005, places=6)
+
+    def test_off_means_no_shift(self):
+        with mock.patch("fair_value.LEVEL_FIT_HALFLIFE_MIN", None):
+            self.assertEqual(fair_value._smoothed_level("E", self.ladder(0.0003), 80000, 0.01), 0.0)
+
+    def test_a_new_gap_moves_the_level_only_part_of_the_way(self):
+        # The gap that has just opened is the signal: the level mustn't swallow it.
+        with mock.patch("fair_value.LEVEL_FIT_HALFLIFE_MIN", 5.0):
+            first = fair_value._smoothed_level("E", self.ladder(0.0003), 80000, 0.01)
+            second = fair_value._smoothed_level("E", self.ladder(0.0010), 80000, 0.01)
+        self.assertAlmostEqual(first, 0.0003, places=6)
+        self.assertAlmostEqual(second, 0.0003 + (1 - 0.5 ** (1 / 5)) * 0.0007, places=6)
+
+    def test_a_wild_fit_is_capped(self):
+        with mock.patch("fair_value.LEVEL_FIT_HALFLIFE_MIN", 5.0):
+            self.assertAlmostEqual(fair_value._smoothed_level("E", self.ladder(0.01), 80000, 0.01), 0.002, places=6)
+
+
+class KrakenFeedTests(unittest.TestCase):
+    def test_kraken_sends_every_quote_change_not_only_trades(self):
+        (sub,) = feeds.KrakenFeed(mock.MagicMock()).subscriptions()
+        self.assertEqual(sub["params"]["event_trigger"], "bbo")
 
 
 if __name__ == "__main__":

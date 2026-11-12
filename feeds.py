@@ -172,7 +172,12 @@ class KrakenFeed(_WsThread):
     SYMBOLS = {"BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD"}
 
     def subscriptions(self):
-        return [{"method": "subscribe", "params": {"channel": "ticker", "symbol": list(self.SYMBOLS)}}]
+        # event_trigger "bbo": an update whenever the best bid or ask changes.
+        # Kraken's default, "trades", only sends one on a trade: 14 quote
+        # changes in 25s against 106 (2026-11-12), with the quote in the index
+        # over 2s old a tenth of the time.
+        return [{"method": "subscribe", "params": {"channel": "ticker", "symbol": list(self.SYMBOLS),
+                                                   "event_trigger": "bbo"}}]
 
     def handle(self, m):
         if m.get("channel") == "ticker":

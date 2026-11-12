@@ -155,22 +155,43 @@ class RiskConfig:
     excluded_tickers: list = field(default_factory=list)
 
 
-def live_risk() -> RiskConfig:
+# Live quotes expire on Kalshi after market_maker.QUOTE_EXPIRY_SECONDS (60), so
+# they are replaced before then even when the price hasn't moved. This leaves
+# 20 seconds for the replacement to go out.
+LIVE_QUOTE_REFRESH_SECONDS = 40.0
+
+
+def live_risk(scale: float | None = None) -> RiskConfig:
     """The limits for real money, sized for a $50 account: everything scales by
     2/15, 2 contracts where paper trades 15. Total exposure is held below the
     balance instead of scaling to $60. The daily loss limit is the number to
     think about: $20 is 40% of the account. Raise these only together with the
     balance. Paper keeps RiskConfig's own numbers, so paper results stay
-    comparable with what came before."""
+    comparable with what came before.
+
+    scale (KALSHI_LIVE_SIZE_SCALE in .env, 1 if unset) multiplies every size
+    and dollar limit together, so they keep their proportions: 1.5 is 3
+    contracts, $60 of exposure and a $30 daily loss limit. The bot never
+    changes it by itself. On 2026-11-05 the account hit the $40 exposure limit
+    and the 10-contract position limit, and in paper 35 of 64 takes found 15
+    or more contracts at the price.
+
+    A live quote is replaced at 40s old, not paper's 15: the bot already moves
+    it whenever its price is off by requote_on_move_cents, and 60% of 102,596
+    orders in 39 hours (2026-11-10..12) replaced a quote at the same price."""
+    k = float(os.getenv("KALSHI_LIVE_SIZE_SCALE", "1")) if scale is None else scale
+    if not 0 < k <= 10:
+        raise ValueError(f"KALSHI_LIVE_SIZE_SCALE must be above 0 and at most 10, not {k}")
     return RiskConfig(
-        max_position_per_market=10,
-        max_total_exposure_usd=40.0,
-        max_daily_loss_usd=20.0,
-        max_single_market_loss_usd=8.0,
-        quote_size=2,
-        take_size=2,
-        delta_lean_ref_usd=4.0,
-        max_take_book_delta_usd=6.67,
+        max_position_per_market=max(1, round(10 * k)),
+        max_total_exposure_usd=40.0 * k,
+        max_daily_loss_usd=20.0 * k,
+        max_single_market_loss_usd=8.0 * k,
+        quote_size=max(1, round(2 * k)),
+        take_size=max(1, round(2 * k)),
+        delta_lean_ref_usd=4.0 * k,
+        max_take_book_delta_usd=round(6.67 * k, 2),
+        max_quote_age_seconds=LIVE_QUOTE_REFRESH_SECONDS,
     )
 
 
