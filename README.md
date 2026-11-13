@@ -36,6 +36,36 @@ All strategies share the same risk rules:
 - **Daily-loss kill switch.**
 - **Price-dependent fees:** Kalshi's formula, in `fees.py`.
 
+## Set up on a new PC
+
+On Windows, with [Git](https://git-scm.com/download/win) and
+[Python](https://www.python.org/downloads/) 3.15 installed (tick "Add
+python.exe to PATH"):
+
+```
+git clone https://github.com/charlesmmartin2005-netizen/kalshi-bot.git
+cd kalshi-bot
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy .env.example .env
+.venv\Scripts\python.exe -m unittest test_live test_settlement test_dashboard_data   # all should pass
+```
+
+Then start it as in "Run it". `.env` starts in paper mode, which needs no
+Kalshi account. With your own Kalshi API key (Kalshi → account settings → API
+keys), put its ID in `.env` as `KALSHI_API_KEY_ID` and save the private key as
+`kalshi_private_key.pem` in this folder: books and trades then stream live
+instead of being polled. Trading for real is "Going live".
+
+- **Each install has its own account and history.** `.env`, the `.pem` key,
+  `fills_log.jsonl`, `halted.txt` and `logs\` are never in git, so a new PC
+  starts with no fills and no positions. Never copy another person's `.env` or
+  key: they place orders on that person's account.
+- **The server scripts are this setup's own.** `deploy-server.ps1`,
+  `server-dashboard.ps1` and `install-app.ps1 -Server` reach the `kalshi-bot`
+  host in `~\.ssh\config`. Running on a server of your own starts from "Run on
+  a server" with your own Lightsail instance and SSH key.
+
 ## Run it
 
 **As a desktop app:** run `install-app.ps1` once. Then open **Kalshi bot**
